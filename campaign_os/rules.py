@@ -27,8 +27,8 @@ import pandas as pd
 import yaml
 
 from campaign_os.config import RULES_PATH
+from campaign_os.schema import ENTITIES, ENTITY_LABELS, ENTITY_REPORT, KNOWN_FIELDS, REPORT_BY_KEY
 
-ENTITIES = ("campaign", "search_term")
 SEVERITIES = {"high": 3, "medium": 2, "low": 1}
 SEVERITY_LABELS = {"high": "Wysoki", "medium": "Średni", "low": "Niski"}
 
@@ -190,6 +190,30 @@ def render(template: str, values: dict[str, Any]) -> str:
 
 # --------------------------------------------------------------------------- reguły
 
+# Minimalna próba, gdy reguła nie definiuje własnej (pole ``sample``).
+DEFAULT_SAMPLE = {
+    "campaign": "clicks >= min_clicks",
+    "search_term": "clicks >= wasted_min_clicks",
+    "ad_group": "clicks >= min_clicks",
+    "keyword": "clicks >= min_clicks",
+    "ad": "impressions >= min_impressions",
+    "device": "clicks >= min_clicks",
+    "time_slot": "clicks >= min_clicks",
+    "location": "clicks >= min_clicks",
+    "audience": "clicks >= min_clicks",
+    "landing_page": "clicks >= min_clicks",
+    "conversion_action": "conversions >= min_conversions",
+    "competitor": "impression_share >= 0.1",
+}
+
+# Nazwy encji wyświetlane jako "obiekt" rekomendacji.
+ENTITY_NAME_FIELD = {
+    "campaign": "campaign", "search_term": "search_term", "ad_group": "ad_group", "keyword": "keyword",
+    "ad": "ad_name", "device": "device_label", "time_slot": "slot", "location": "location",
+    "audience": "segment", "landing_page": "landing_page", "conversion_action": "conversion_action",
+    "competitor": "competitor_domain",
+}
+
 
 @dataclass
 class Rule:
@@ -202,16 +226,31 @@ class Rule:
     action: str = ""
     message: str = ""
     recommendation: str = ""
+    evidence: str = ""
+    sample: str = ""
     impact: str | None = None
     enabled: bool = True
     _tree: ast.Expression | None = field(default=None, repr=False)
     _impact_tree: ast.Expression | None = field(default=None, repr=False)
+    _sample_tree: ast.Expression | None = field(default=None, repr=False)
+
+    @property
+    def source_report(self) -> str:
+        return REPORT_BY_KEY[ENTITY_REPORT[self.entity]].label
 
 
 @dataclass
 class RuleSet:
     rules: list[Rule]
     errors: list[str]
+
+
+@dataclass
+class RuleStat:
+    status: str            # ok | no_data | skipped | error | disabled
+    matched: int = 0       # rekomendacje (warunek + wystarczająca próba)
+    insufficient: int = 0  # warunek spełniony, ale próba za mała → bez rekomendacji
+    reason: str = ""
 
 
 REQUIRED_RULE_KEYS = ("id", "entity", "condition")
@@ -249,9 +288,11 @@ def parse_rules(text: str) -> RuleSet:
         if severity not in SEVERITIES:
             errors.append(f"Reguła {rid}: nieznany severity '{severity}' (high/medium/low).")
             continue
+        sample = str(raw.get("sample") or DEFAULT_SAMPLE[raw["entity"]])
         try:
             tree = compile_expression(str(raw["condition"]))
             impact_tree = compile_expression(str(raw["impact"])) if raw.get("impact") else None
+            sample_tree = compile_expression(sample)
         except ExpressionError as exc:
             errors.append(f"Reguła {rid}: {exc}.")
             continue
@@ -266,10 +307,13 @@ def parse_rules(text: str) -> RuleSet:
             action=str(raw.get("action", "")),
             message=str(raw.get("message", "")),
             recommendation=str(raw.get("recommendation", "")),
+            evidence=str(raw.get("evidence", "")),
+            sample=sample,
             impact=str(raw["impact"]) if raw.get("impact") else None,
             enabled=bool(raw.get("enabled", True)),
             _tree=tree,
             _impact_tree=impact_tree,
+            _sample_tree=sample_tree,
         ))
     return RuleSet(rules, errors)
 
@@ -280,34 +324,78 @@ def load_rules(path: Path = RULES_PATH) -> RuleSet:
 
 FINDING_COLUMNS = [
     "rule_id", "rule_name", "severity", "category", "action", "entity", "entity_name",
-    "campaign", "ad_group", "message", "recommendation", "impact",
+    "campaign", "ad_group", "message", "recommendation", "evidence", "source", "data_scope", "impact",
     "cost", "clicks", "conversions", "cpa",
 ]
+
+
+def _missing_fields(rule: Rule, df: pd.DataFrame, context: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Zwraca (znane pola nieobecne w raporcie, nieznane nazwy)."""
+    names = set()
+    for tree in (rule._tree, rule._impact_tree, rule._sample_tree):
+        if tree is not None:
+            names |= expression_names(tree)
+    absent = sorted(n for n in names if n not in df.columns and n not in context and n not in ("true", "false"))
+    known = [n for n in absent if n in KNOWN_FIELDS or n.endswith(("_prev", "_change"))]
+    unknown = [n for n in absent if n not in known]
+    return known, unknown
+
+
+def _evidence_suffix(rule: Rule, row: pd.Series, context: dict[str, Any]) -> tuple[str, str]:
+    source = rule.source_report
+    if rule.entity in ("campaign", "search_term") or bool(row.get("has_date", True)):
+        scope = context.get("period_label", "")
+    else:
+        scope = "okres eksportu (raport bez daty)"
+    return source, scope
 
 
 def run_rules(
     ruleset: RuleSet,
     frames: dict[str, pd.DataFrame],
     context: dict[str, Any],
+    stats: dict[str, RuleStat] | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Uruchamia reguły na encjach. Zwraca (findings, błędy_wykonania)."""
+    """Uruchamia reguły na encjach. Zwraca (findings, błędy_wykonania).
+
+    Reguła jest uruchamiana tylko, gdy istnieje ramka jej encji (czyli dostarczono raport) i ramka
+    zawiera wszystkie potrzebne kolumny. Wiersze spełniające warunek, ale nie spełniające progu próby
+    (``sample``), nie generują rekomendacji – są liczone w ``stats[...].insufficient``.
+    """
+    stats = stats if stats is not None else {}
     findings: list[dict[str, Any]] = []
     errors: list[str] = []
     for rule in ruleset.rules:
         if not rule.enabled:
+            stats[rule.id] = RuleStat("disabled")
             continue
         df = frames.get(rule.entity)
         if df is None or df.empty:
+            stats[rule.id] = RuleStat("no_data", reason=f"brak raportu {rule.source_report}")
+            continue
+        known, unknown = _missing_fields(rule, df, context)
+        if unknown:
+            msg = "nieznana zmienna: " + ", ".join(unknown)
+            errors.append(f"Reguła {rule.id}: {msg}")
+            stats[rule.id] = RuleStat("error", reason=msg)
+            continue
+        if known:
+            stats[rule.id] = RuleStat("skipped", reason=f"raport {rule.source_report} nie zawiera kolumn: "
+                                                        + ", ".join(known))
             continue
         try:
-            mask = evaluate_mask(rule._tree, df, context)
-            matched = df[mask]
+            cond = evaluate_mask(rule._tree, df, context)
+            sample_ok = evaluate_mask(rule._sample_tree, df, context)
+            matched = df[cond & sample_ok]
             impact = None
             if rule._impact_tree is not None and not matched.empty:
                 impact = evaluate(rule._impact_tree, matched, context)
         except (ExpressionError, TypeError, ValueError) as exc:
             errors.append(f"Reguła {rule.id}: {exc}")
+            stats[rule.id] = RuleStat("error", reason=str(exc))
             continue
+        stats[rule.id] = RuleStat("ok", matched=len(matched), insufficient=int((cond & ~sample_ok).sum()))
+        name_field = ENTITY_NAME_FIELD[rule.entity]
         for pos, (_, row) in enumerate(matched.iterrows()):
             values = {**context, **row.to_dict()}
             if isinstance(impact, pd.Series):
@@ -316,7 +404,7 @@ def run_rules(
                 imp = impact
             else:
                 imp = float("nan")
-            name = row.get("search_term") if rule.entity == "search_term" else row.get("campaign")
+            source, data_scope = _evidence_suffix(rule, row, context)
             findings.append({
                 "rule_id": rule.id,
                 "rule_name": rule.name,
@@ -324,11 +412,14 @@ def run_rules(
                 "category": rule.category,
                 "action": rule.action,
                 "entity": rule.entity,
-                "entity_name": name,
+                "entity_name": row.get(name_field, ""),
                 "campaign": row.get("campaign", ""),
                 "ad_group": row.get("ad_group", ""),
                 "message": render(rule.message, values),
                 "recommendation": render(rule.recommendation, values),
+                "evidence": render(rule.evidence, values),
+                "source": source,
+                "data_scope": data_scope,
                 "impact": float(imp) if imp is not None and pd.notna(imp) else float("nan"),
                 "cost": row.get("cost", float("nan")),
                 "clicks": row.get("clicks", float("nan")),

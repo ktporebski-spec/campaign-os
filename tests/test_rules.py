@@ -60,7 +60,7 @@ def test_parse_rules_reports_errors_and_skips_bad_rules():
     rs = parse_rules("""
 rules:
   - {id: OK, entity: campaign, condition: "cost > 1"}
-  - {id: BAD_ENTITY, entity: keyword, condition: "cost > 1"}
+  - {id: BAD_ENTITY, entity: foo, condition: "cost > 1"}
   - {id: BAD_EXPR, entity: campaign, condition: "cost >"}
   - {id: OK, entity: campaign, condition: "cost > 2"}
   - {id: NO_COND, entity: campaign}
@@ -80,7 +80,9 @@ rules:
   - id: R1
     entity: campaign
     condition: conversions == 0
+    sample: cost > 0
     severity: high
+    evidence: "koszt {cost:.0f}"
     message: "{campaign} – {cost:.0f} {currency}"
     impact: cost * 0.5
   - id: R2
@@ -93,6 +95,8 @@ rules:
     assert findings["rule_id"].tolist() == ["R1"]
     assert findings.loc[0, "message"] == "A – 100 PLN"
     assert findings.loc[0, "impact"] == 50.0
+    assert findings.loc[0, "evidence"] == "koszt 100"
+    assert findings.loc[0, "source"] == "Campaign"
 
 
 def test_runtime_error_is_reported_not_raised():
@@ -105,3 +109,40 @@ def test_default_rules_file_is_valid():
     rs = load_rules()
     assert rs.errors == []
     assert len(rs.rules) >= 8
+
+
+def test_sample_threshold_blocks_recommendation_and_is_counted():
+    from campaign_os.rules import RuleStat
+    rs = parse_rules("""
+rules:
+  - {id: R, entity: campaign, condition: "conversions == 0", sample: "cost >= 200"}
+""")
+    stats: dict[str, RuleStat] = {}
+    findings, errors = run_rules(rs, {"campaign": DF}, {}, stats)
+    assert findings.empty and errors == []
+    assert stats["R"].status == "ok" and stats["R"].insufficient == 1
+
+
+def test_rule_without_report_does_not_run():
+    from campaign_os.rules import RuleStat
+    rs = parse_rules("rules:\n  - {id: D, entity: device, condition: 'cvr_z < -3'}\n")
+    stats: dict[str, RuleStat] = {}
+    findings, errors = run_rules(rs, {"campaign": DF}, {}, stats)
+    assert findings.empty and errors == []
+    assert stats["D"].status == "no_data"
+
+
+def test_rule_with_missing_known_column_is_skipped_not_error():
+    from campaign_os.rules import RuleStat
+    kw = pd.DataFrame({"keyword": ["a"], "clicks": [100.0], "cost": [10.0], "conversions": [0.0]})
+    rs = parse_rules("rules:\n  - {id: QS, entity: keyword, condition: 'quality_score <= 4'}\n")
+    stats: dict[str, RuleStat] = {}
+    findings, errors = run_rules(rs, {"keyword": kw}, {"min_clicks": 30}, stats)
+    assert findings.empty and errors == []
+    assert stats["QS"].status == "skipped" and "quality_score" in stats["QS"].reason
+
+
+def test_every_default_rule_has_evidence_and_valid_sample():
+    rs = load_rules()
+    assert all(r.evidence.strip() for r in rs.rules), [r.id for r in rs.rules if not r.evidence.strip()]
+    assert all(r.sample for r in rs.rules)

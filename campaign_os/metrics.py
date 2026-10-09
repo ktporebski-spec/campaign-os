@@ -28,13 +28,22 @@ KPI_META = {
 
 
 def safe_div(num, den):
-    """Dzielenie zwracające NaN zamiast inf/błędu przy zerowym mianowniku."""
-    if isinstance(num, (pd.Series, np.ndarray)) or isinstance(den, (pd.Series, np.ndarray)):
-        num_s = pd.Series(num, dtype=float) if not isinstance(num, pd.Series) else num.astype(float)
-        den_s = pd.Series(den, dtype=float) if not isinstance(den, pd.Series) else den.astype(float)
-        return num_s / den_s.where(den_s != 0)
-    num = float(num)
+    """Dzielenie zwracające NaN zamiast inf/błędu przy zerowym mianowniku.
+
+    Obsługuje kombinacje Series/skalar bez wyrównywania indeksów skalara.
+    """
+    if isinstance(num, np.ndarray):
+        num = pd.Series(num, dtype=float)
+    if isinstance(den, np.ndarray):
+        den = pd.Series(den, dtype=float)
+    if isinstance(den, pd.Series):
+        den = den.astype(float)
+        num = num.astype(float) if isinstance(num, pd.Series) else float(num)
+        return num / den.where(den != 0)
     den = float(den)
+    if isinstance(num, pd.Series):
+        return num.astype(float) / den if den else pd.Series(np.nan, index=num.index)
+    num = float(num)
     return num / den if den else float("nan")
 
 
@@ -148,3 +157,67 @@ def entity_comparison(
         prev_col = merged[f"{m}_prev"].astype(float)
         merged[f"{m}_change"] = (merged[m] - prev_col) / prev_col.abs().where(prev_col != 0)
     return merged.sort_values("cost", ascending=False).reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------- agregacja ogólna
+
+
+def aggregate(df: pd.DataFrame, keys: list[str] | tuple) -> pd.DataFrame:
+    """Agreguje dowolny raport SEM po kluczach, szanując typ metryk.
+
+    * metryki sumowalne – suma,
+    * udziały w wyświetleniach (Search IS, Lost IS) – średnia ważona wyświetleniami
+      kwalifikującymi się (impressions / Search IS),
+    * pozostałe udziały i oceny (Quality Score) – średnia ważona wyświetleniami
+      (lub zwykła średnia, gdy raport nie ma wyświetleń),
+    * wymiary i kategorie – ostatnia niepusta wartość (dane są sortowane po dacie).
+    Kolumna ``date`` spoza kluczy jest pomijana.
+    """
+    from campaign_os.schema import ADDITIVE, IS_SHARES, SCORES, SHARES
+
+    keys = [k for k in keys if k in df.columns]
+    work = df.copy()
+    if "date" in work.columns and "date" not in keys:
+        work = work.sort_values("date").drop(columns=["date"])
+    dummy = not keys
+    if dummy:
+        work["_all"] = 0
+        keys = ["_all"]
+    cols = [c for c in work.columns if c not in keys]
+    additive = [c for c in ADDITIVE if c in cols]
+    weighted = [c for c in SHARES + SCORES if c in cols]
+    others = [c for c in cols if c not in additive + weighted]
+
+    base_w = work["impressions"].astype(float) if "impressions" in work.columns else pd.Series(1.0, index=work.index)
+    if "search_impression_share" in work.columns:
+        is_ = work["search_impression_share"].astype(float)
+        eligible = (base_w / is_.where(is_ > 0)).fillna(base_w)
+    else:
+        eligible = base_w
+    tmp_cols = []
+    for c in weighted:
+        w = eligible if c in IS_SHARES else base_w
+        if w.sum() == 0:
+            w = pd.Series(1.0, index=work.index)
+        v = work[c].astype(float)
+        work[f"_{c}_vw"] = (v * w).where(v.notna(), 0.0)
+        work[f"_{c}_w"] = w.where(v.notna(), 0.0)
+        tmp_cols += [f"_{c}_vw", f"_{c}_w"]
+    text_cols = [c for c in others if not pd.api.types.is_numeric_dtype(work[c])
+                 and not pd.api.types.is_datetime64_any_dtype(work[c])]
+    for c in text_cols:
+        col = work[c].astype(object)
+        work[c] = col.where(col != "", np.nan)
+
+    agg = {c: "sum" for c in additive + tmp_cols}
+    agg.update({c: "last" for c in others})
+    out = work.groupby(keys, as_index=False, sort=True, dropna=False).agg(agg)
+    for c in weighted:
+        out[c] = out[f"_{c}_vw"] / out[f"_{c}_w"].where(out[f"_{c}_w"] > 0)
+    out = out.drop(columns=tmp_cols)
+    for c in text_cols:
+        out[c] = out[c].fillna("").astype(str)
+    if dummy:
+        out = out.drop(columns=["_all"])
+    order = [c for c in df.columns if c in out.columns]
+    return out[order].reset_index(drop=True)

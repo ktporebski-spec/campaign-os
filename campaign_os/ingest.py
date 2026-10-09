@@ -22,32 +22,30 @@ from pathlib import Path
 import pandas as pd
 
 from campaign_os.config import ALIASES_PATH, load_yaml
+from campaign_os.metrics import aggregate
+from campaign_os.schema import (
+    ADDITIVE, BASE_ADDITIVE, CATEGORIES, CATEGORY_KIND, CATEGORY_VALUES, DAY_LABELS, DAY_NAMES,
+    DETECTION_ORDER, DEVICE_LABELS, DIMENSIONS as TEXT_DIMENSIONS, MICRO_CONVERSION_PATTERNS, REPORT_BY_KEY,
+    REPORTS, SCORES, SHARES,
+)
 
 CAMPAIGN_DAILY = "campaign_daily"
 SEARCH_TERMS = "search_terms_daily"
 
-REPORT_LABELS = {
-    CAMPAIGN_DAILY: "campaign_daily",
-    SEARCH_TERMS: "search_terms_daily",
-}
+REPORT_LABELS = {r.key: r.label for r in REPORTS}
 
-METRIC_COLUMNS = ["impressions", "clicks", "cost", "conversions", "conversion_value"]
-REQUIRED = {
-    CAMPAIGN_DAILY: ["date", "campaign", "impressions", "clicks", "cost"],
-    SEARCH_TERMS: ["date", "campaign", "search_term", "impressions", "clicks", "cost"],
-}
-DIMENSIONS = {
+METRIC_COLUMNS = list(BASE_ADDITIVE)
+# Kolumny zawsze obecne w raportach podstawowych (zgodność z v0.1).
+CORE_DIMENSIONS = {
     CAMPAIGN_DAILY: ["date", "campaign", "campaign_id", "campaign_type", "campaign_status", "currency"],
     SEARCH_TERMS: [
         "date", "campaign", "ad_group", "search_term", "match_type", "keyword",
         "added_excluded", "currency",
     ],
 }
-# Kolumny, po których agregujemy duplikaty (np. ten sam dzień w dwóch plikach / segmentach).
-GROUP_KEYS = {
-    CAMPAIGN_DAILY: ["date", "campaign"],
-    SEARCH_TERMS: ["date", "campaign", "ad_group", "search_term", "match_type"],
-}
+DIMENSIONS = CORE_DIMENSIONS
+REQUIRED = {r.key: [alt[0] for alt in r.required] for r in REPORTS}
+GROUP_KEYS = {r.key: list(r.group_keys) for r in REPORTS}
 
 TOTAL_ROW_PATTERN = re.compile(
     r"^\s*(total|totals|razem|łącznie|lacznie|suma|ogółem|ogolem)\b", re.IGNORECASE
@@ -260,14 +258,74 @@ def parse_dates(values: pd.Series) -> pd.Series:
 # --------------------------------------------------------------------------- główne API
 
 
+def _has(cols: set[str], alternatives: tuple) -> bool:
+    return any(a in cols for a in alternatives)
+
+
 def detect_report_type(columns: list[str]) -> str:
-    """date + campaign + search_term → search terms; date + campaign → raport kampanii."""
+    """Rozpoznaje typ raportu po kolumnach (kolejność: od najbardziej specyficznych).
+
+    Raporty podstawowe: ``date + campaign + search_term`` → Search Terms, ``date + campaign`` → kampanie.
+    Raporty opcjonalne rozpoznajemy po charakterystycznym wymiarze (słowo kluczowe, urządzenie,
+    godzina, lokalizacja, strona docelowa, działanie konwersji, domena konkurenta, odbiorcy, grupa reklam).
+    """
     cols = set(columns)
+    for key in DETECTION_ORDER:
+        spec = REPORT_BY_KEY[key]
+        if all(_has(cols, alt) for alt in spec.signature):
+            if spec.date_required and "date" not in cols:
+                raise IngestError(MISSING_DATE_MESSAGE)
+            if spec.core and "campaign" not in cols:
+                raise IngestError(MISSING_CAMPAIGN_MESSAGE)
+            return key
     if "date" not in cols:
         raise IngestError(MISSING_DATE_MESSAGE)
-    if "campaign" not in cols:
-        raise IngestError(MISSING_CAMPAIGN_MESSAGE)
-    return SEARCH_TERMS if "search_term" in cols else CAMPAIGN_DAILY
+    raise IngestError(MISSING_CAMPAIGN_MESSAGE)
+
+
+_EMPTY_VALUES = {"", "--", "-", " --", "nan", "None"}
+
+
+def parse_share(values: pd.Series, language: str = "en") -> pd.Series:
+    """Udziały procentowe → ułamek 0–1. "< 10%" → 0.10, "> 90%" → 0.90, "--" → NaN."""
+    text = values.astype(str).str.strip()
+    nums = parse_numeric(text.str.replace(r"[<>]", "", regex=True), language)
+    has_pct = text.str.contains("%", regex=False)
+    if has_pct.any() or nums.max(skipna=True) > 1:
+        nums = nums / 100
+    return nums.clip(lower=0, upper=1)
+
+
+def parse_category(values: pd.Series, field_name: str) -> pd.Series:
+    mapping = CATEGORY_VALUES[CATEGORY_KIND[field_name]]
+    keys = values.astype(str).map(normalize_header)
+    out = keys.map(mapping)
+    if field_name == "device":
+        out = out.where(keys.isin(["", "nan"]) | out.notna(), "other")
+    return out.astype(object).where(out.notna(), None)
+
+
+def parse_hour(values: pd.Series) -> pd.Series:
+    extracted = values.astype(str).str.extract(r"(\d{1,2})", expand=False)
+    hours = pd.to_numeric(extracted, errors="coerce")
+    return hours.where(hours.between(0, 23))
+
+
+def parse_day_of_week(values: pd.Series) -> pd.Series:
+    keys = values.astype(str).map(normalize_header)
+    numeric = pd.to_numeric(keys, errors="coerce")
+    named = keys.map(DAY_NAMES)
+    return named.fillna(numeric.where(numeric.between(1, 7)))
+
+
+def _clean_text(values: pd.Series) -> pd.Series:
+    text = values.astype(str).str.strip()
+    return text.where(~text.isin(_EMPTY_VALUES), "")
+
+
+def _is_micro(row_text: pd.Series) -> pd.Series:
+    keys = row_text.map(normalize_header)
+    return keys.apply(lambda k: any(p in k for p in MICRO_CONVERSION_PATTERNS))
 
 
 def read_report(
@@ -278,7 +336,7 @@ def read_report(
 ) -> IngestResult:
     """Wczytuje surowy plik CSV i zwraca znormalizowany DataFrame."""
     text = raw if isinstance(raw, str) else decode_bytes(raw)
-    text = text.lstrip("﻿")
+    text = text.lstrip("\ufeff")
     lines = text.splitlines()
     if not lines:
         raise IngestError("Plik jest pusty.")
@@ -297,6 +355,7 @@ def read_report(
     df = df[list(mapping)].rename(columns=mapping)
 
     report_type = detect_report_type(list(df.columns))
+    spec = REPORT_BY_KEY[report_type]
     if expected_type and report_type != expected_type:
         raise IngestError(
             f"Plik wygląda na raport „{REPORT_LABELS[report_type]}”, "
@@ -308,53 +367,66 @@ def read_report(
         warnings.append("Koszt przeliczono z mikrojednostek (cost_micros).")
     df = df.drop(columns=["cost_micros"], errors="ignore")
 
-    missing = [c for c in REQUIRED[report_type] if c not in df.columns]
+    cols = set(df.columns)
+    missing = [" / ".join(alt) for alt in spec.required if not _has(cols, alt)]
     if missing:
-        raise IngestError("Brak wymaganych kolumn: " + ", ".join(missing))
+        raise IngestError(f"{spec.title}: brak wymaganych kolumn: " + ", ".join(missing))
 
-    # Usuń wiersze podsumowań i puste.
-    first_col = df.iloc[:, 0].astype(str)
-    is_total = (
-        first_col.str.match(TOTAL_ROW_PATTERN)
-        | df["date"].astype(str).str.match(TOTAL_ROW_PATTERN)
-        | df["campaign"].astype(str).str.match(TOTAL_ROW_PATTERN)
-    )
+    # Usuń wiersze podsumowań ("Razem", "Total") – sprawdzamy pierwszą kolumnę i wymiary kluczowe.
+    check_cols = [df.columns[0]] + [c for c in ("date", "campaign") if c in df.columns]
+    check_cols += [a for alt in spec.signature for a in alt if a in df.columns]
+    is_total = pd.Series(False, index=df.index)
+    for c in dict.fromkeys(check_cols):
+        is_total |= df[c].astype(str).str.match(TOTAL_ROW_PATTERN)
     if is_total.any():
         warnings.append(f"Usunięto {int(is_total.sum())} wiersz(y) podsumowań (Total/Razem).")
     df = df[~is_total].copy()
 
-    df["date"] = parse_dates(df["date"])
-    bad_dates = int(df["date"].isna().sum())
-    if bad_dates:
-        warnings.append(f"Pominięto {bad_dates} wiersz(y) bez poprawnej daty.")
-        df = df[df["date"].notna()].copy()
+    if "date" in df.columns:
+        df["date"] = parse_dates(df["date"])
+        bad_dates = int(df["date"].isna().sum())
+        if bad_dates:
+            warnings.append(f"Pominięto {bad_dates} wiersz(y) bez poprawnej daty.")
+            df = df[df["date"].notna()].copy()
+    elif not spec.date_required:
+        warnings.append("Raport nie zawiera daty – dane traktowane jako suma za okres eksportu "
+                        "(bez filtrowania po wybranym zakresie dat).")
     if df.empty:
         raise IngestError("Po normalizacji plik nie zawiera żadnych wierszy z danymi.")
 
-    for col in METRIC_COLUMNS:
+    for col in ADDITIVE:
         if col in df.columns:
             parsed = parse_numeric(df[col], language)
-            unparsed = int((parsed.isna() & ~df[col].astype(str).str.strip().isin(["", "--", "-", " --"])).sum())
+            unparsed = int((parsed.isna() & ~df[col].astype(str).str.strip().isin(_EMPTY_VALUES)).sum())
             if unparsed:
                 warnings.append(f"Kolumna {col}: {unparsed} wartości nieliczbowych potraktowano jako 0.")
             df[col] = parsed.fillna(0.0)
-        else:
+        elif col in spec.metrics:
             df[col] = 0.0
             if col in ("conversions", "conversion_value"):
                 warnings.append(f"Brak kolumny {col} – przyjęto 0.")
+    for col in SHARES:
+        if col in df.columns:
+            df[col] = parse_share(df[col], language)
+    for col in SCORES:
+        if col in df.columns:
+            df[col] = parse_numeric(df[col], language)
+    for col in CATEGORIES:
+        if col in df.columns:
+            df[col] = parse_category(df[col], col)
+    if "hour" in df.columns:
+        df["hour"] = parse_hour(df["hour"])
+    if "day_of_week" in df.columns:
+        df["day_of_week"] = parse_day_of_week(df["day_of_week"])
+    for col in TEXT_DIMENSIONS:
+        if col in df.columns:
+            df[col] = _clean_text(df[col])
 
-    for col in DIMENSIONS[report_type]:
-        if col not in df.columns:
-            df[col] = ""
-        if col != "date":
-            df[col] = df[col].astype(str).str.strip()
-
-    if report_type == SEARCH_TERMS:
-        df["search_term"] = df["search_term"].str.lower()
-        empty_terms = df["search_term"].isin(["", "--"])
-        if empty_terms.any():
-            df = df[~empty_terms].copy()
-
+    if report_type in CORE_DIMENSIONS:
+        for col in CORE_DIMENSIONS[report_type]:
+            if col not in df.columns:
+                df[col] = ""
+    df = _derive(df, report_type, warnings)
     df = aggregate_duplicates(df, report_type)
     return IngestResult(
         df=df,
@@ -367,15 +439,80 @@ def read_report(
     )
 
 
+def _derive(df: pd.DataFrame, report_type: str, warnings: list[str]) -> pd.DataFrame:
+    """Pola pochodne zależne od typu raportu."""
+    if report_type == SEARCH_TERMS:
+        df["search_term"] = df["search_term"].str.lower()
+        df = df[df["search_term"] != ""].copy()
+    if "keyword" in df.columns and report_type == "keywords":
+        df["keyword"] = df["keyword"].str.strip("[]\"+ ").str.lower()
+    if report_type == "time":
+        if "day_of_week" not in df.columns and "date" in df.columns:
+            df["day_of_week"] = df["date"].dt.dayofweek + 1
+        if "day_of_week" in df.columns:
+            df["day_of_week_label"] = df["day_of_week"].map(DAY_LABELS).fillna("")
+        bad = df[[c for c in ("hour", "day_of_week") if c in df.columns]].isna().all(axis=1)
+        if bad.any():
+            warnings.append(f"Pominięto {int(bad.sum())} wiersz(y) bez poprawnej godziny / dnia tygodnia.")
+            df = df[~bad].copy()
+    if report_type == "devices":
+        df["device"] = df["device"].fillna("other")
+        df["device_label"] = df["device"].map(DEVICE_LABELS).fillna("Inne")
+    if report_type == "locations":
+        loc_cols = [c for c in ("city", "region", "location", "country") if c in df.columns]
+        loc = pd.Series("", index=df.index)
+        for c in loc_cols:  # najbardziej szczegółowy dostępny poziom
+            loc = loc.where(loc != "", df[c])
+        df["location"] = loc
+        df = df[df["location"] != ""].copy()
+    if report_type == "audiences":
+        seg_cols = [c for c in ("audience", "age_range", "gender", "household_income", "parental_status")
+                    if c in df.columns]
+        labels = {"audience": "Segment", "age_range": "Wiek", "gender": "Płeć",
+                  "household_income": "Dochód", "parental_status": "Status rodzicielski"}
+        df["segment"] = df[seg_cols].apply(lambda r: " / ".join(v for v in r if v), axis=1)
+        df["segment_type"] = df[seg_cols].apply(
+            lambda r: " × ".join(labels[c] for c, v in r.items() if v), axis=1)
+        df = df[df["segment"] != ""].copy()
+    if report_type == "conversion_actions":
+        text = df["conversion_action"] + " " + (df["conversion_category"] if "conversion_category" in df.columns else "")
+        df["is_micro"] = _is_micro(text)
+        df = df[df["conversion_action"] != ""].copy()
+    if report_type == "auction_insights":
+        dom = df["competitor_domain"].map(normalize_header)
+        df["is_self"] = dom.isin(["you", "ty", "twoja domena", "your domain", "ty twoja domena"])
+    return df
+
+
 def aggregate_duplicates(df: pd.DataFrame, report_type: str) -> pd.DataFrame:
-    keys = GROUP_KEYS[report_type]
-    other_dims = [c for c in DIMENSIONS[report_type] if c not in keys]
-    agg = {m: "sum" for m in METRIC_COLUMNS}
-    agg.update({d: "first" for d in other_dims})
-    out = df.groupby(keys, as_index=False, sort=True, dropna=False).agg(agg)
-    return out[DIMENSIONS[report_type] + METRIC_COLUMNS].reset_index(drop=True)
+    """Sumuje duplikaty (np. ten sam dzień w dwóch plikach) z zachowaniem typów metryk."""
+    keys = [k for k in GROUP_KEYS[report_type] if k in df.columns]
+    if report_type == "time":
+        keys += [k for k in ("day_of_week_label",) if k in df.columns]
+    if report_type == "auction_insights":
+        keys += ["is_self"]
+    if report_type in ("audiences",):
+        keys += ["segment", "segment_type"]
+    if report_type == "conversion_actions":
+        keys += [k for k in ("conversion_category", "is_micro") if k in df.columns]
+    out = aggregate(df, keys)
+    if report_type in CORE_DIMENSIONS:
+        lead = CORE_DIMENSIONS[report_type] + METRIC_COLUMNS
+        out = out[lead + [c for c in out.columns if c not in lead]]
+    return out
 
 
 def read_report_file(path: str | Path, expected_type: str | None = None) -> IngestResult:
     path = Path(path)
     return read_report(path.read_bytes(), source_name=path.name, expected_type=expected_type)
+
+
+@lru_cache(maxsize=4)
+def _alias_spec(path: str) -> dict:
+    return load_yaml(Path(path)).get("columns", {})
+
+
+def column_names(canonical: str, aliases_path: Path = ALIASES_PATH) -> dict[str, list[str]]:
+    """Nazwy kolumny w eksportach Google Ads: {"pl": [...], "en": [...]} (pierwsza = najczęstsza)."""
+    spec = _alias_spec(str(aliases_path)).get(canonical, {}) or {}
+    return {"pl": list(spec.get("pl") or []), "en": list(spec.get("en") or [])}

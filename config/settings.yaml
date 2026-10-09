@@ -18,3 +18,11 @@ thresholds:
   high_performer_min_conversions: 2
   # ...i CPA nie wyższym niż (docelowy CPA × ten mnożnik).
   high_performer_max_cpa_ratio: 0.8
+
+  # Minimalna próba – poniżej tych wartości Campaign OS NIE rekomenduje zmian
+  # (reguła odnotowuje tylko "za mała próba").
+  min_clicks: 30
+  min_impressions: 300
+  min_conversions: 3
+  # Próg istotności różnicy CVR segmentu vs reszta (|z| ≥ 1,96 ≈ 95% ufności).
+  z_threshold: 1.96

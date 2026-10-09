@@ -7,9 +7,18 @@
 # Campaign OS liczy je sam z wartości bazowych.
 
 columns:
+  # ---------------------------------------------------------------- czas
   date:
     en: [Day, Date, Segment date, Segments date, "segments.date"]
     pl: [Dzień, Data, Dzien]
+  day_of_week:
+    en: [Day of week, Day of the week, "segments.day_of_week"]
+    pl: [Dzień tygodnia]
+  hour:
+    en: [Hour of day, Hour, Hour of the day, "segments.hour"]
+    pl: [Godzina, Godzina dnia, Pora dnia]
+
+  # ---------------------------------------------------------------- struktura konta
   campaign:
     en: [Campaign, Campaign name, "campaign.name"]
     pl: [Kampania, Nazwa kampanii]
@@ -25,21 +34,189 @@ columns:
   ad_group:
     en: [Ad group, Ad group name, "ad_group.name"]
     pl: [Grupa reklam, Nazwa grupy reklam]
-  search_term:
-    en: [Search term, Search query, Query, "search_term_view.search_term"]
-    pl: [Wyszukiwane hasło, Wyszukiwane hasła, Hasło wyszukiwania, Zapytanie]
-  match_type:
-    en: [Match type, Search term match type, "search_term_view.match_type"]
-    pl: [Typ dopasowania, Typ dopasowania wyszukiwanego hasła]
-  keyword:
-    en: [Keyword, Keyword text]
-    pl: [Słowo kluczowe]
-  added_excluded:
-    en: [Added/Excluded, Added / Excluded]
-    pl: [Dodane/wykluczone, Dodane / wykluczone]
+  ad_group_id:
+    en: [Ad group ID, "ad_group.id"]
+    pl: [Identyfikator grupy reklam, ID grupy reklam]
+  ad_group_status:
+    en: [Ad group status, Ad group state, "ad_group.status"]
+    pl: [Stan grupy reklam, Status grupy reklam]
   currency:
     en: [Currency code, Currency]
     pl: [Kod waluty, Waluta]
+
+  # ---------------------------------------------------------------- słowa kluczowe i hasła
+  keyword:
+    en: [Keyword, Keyword text, Search keyword, "ad_group_criterion.keyword.text"]
+    pl: [Słowo kluczowe, Słowo kluczowe w sieci wyszukiwania]
+  keyword_status:
+    en: [Keyword status, Keyword state]
+    pl: [Stan słowa kluczowego, Status słowa kluczowego]
+  match_type:
+    en: [Match type, Search term match type, Keyword match type, "search_term_view.match_type"]
+    pl: [Typ dopasowania, Typ dopasowania wyszukiwanego hasła, Typ dopasowania słowa kluczowego]
+  search_term:
+    en: [Search term, Search query, Query, "search_term_view.search_term"]
+    pl: [Wyszukiwane hasło, Wyszukiwane hasła, Hasło wyszukiwania, Zapytanie]
+  added_excluded:
+    en: [Added/Excluded, Added / Excluded]
+    pl: [Dodane/wykluczone, Dodane / wykluczone]
+  max_cpc:
+    en: [Max. CPC, Max CPC, Default max. CPC]
+    pl: [Maks. CPC, Maksymalny CPC]
+
+  # ---------------------------------------------------------------- Quality Score
+  quality_score:
+    en: [Quality Score, Qual. Score, Quality score, "ad_group_criterion.quality_info.quality_score"]
+    pl: [Wynik jakości]
+  expected_ctr:
+    en: [Exp. CTR, Expected CTR, Expected clickthrough rate]
+    pl: [Oczekiwany CTR, Przewidywany CTR, Oczekiwany współczynnik klikalności]
+  ad_relevance:
+    en: [Ad relevance, Ad relevance (QS)]
+    pl: [Trafność reklamy]
+  landing_page_experience:
+    en: [Landing page exper., Landing page experience, Landing page exp.]
+    pl: [Jakość strony docelowej, Wrażenia ze strony docelowej]
+
+  # ---------------------------------------------------------------- Impression Share
+  search_impression_share:
+    en: [Search impr. share, Search impression share, Search Impr. share]
+    pl: [Udział w wyświetleniach w sieci wyszukiwania, Udział w wyśw. w sieci wyszuk.,
+         Udział w wyśw. w sieci wyszukiwania]
+  search_lost_is_budget:
+    en: [Search lost IS (budget), Search Lost IS (budget), Search lost impression share (budget),
+         Search lost impr. share (budget)]
+    pl: [Utracony udział w wyświetleniach w sieci wyszukiwania (budżet),
+         Utrata udziału w wyświetleniach w sieci wyszukiwania (budżet),
+         Utracony udział w wyśw. w sieci wyszuk. (budżet), Utrac. udział w wyśw. w sieci wyszuk. (budżet)]
+  search_lost_is_rank:
+    en: [Search lost IS (rank), Search Lost IS (rank), Search lost impression share (rank),
+         Search lost impr. share (rank)]
+    pl: [Utracony udział w wyświetleniach w sieci wyszukiwania (ranking),
+         Utrata udziału w wyświetleniach w sieci wyszukiwania (ranking),
+         Utracony udział w wyśw. w sieci wyszuk. (ranking), Utrac. udział w wyśw. w sieci wyszuk. (ranking)]
+  search_top_is:
+    en: [Search top IS, Search top impression share]
+    pl: [Udział w wyświetleniach u góry strony w sieci wyszukiwania, Udział w wyśw. u góry strony w sieci wyszuk.]
+  search_abs_top_is:
+    en: [Search abs. top IS, Search absolute top impression share]
+    pl: [Udział w wyświetleniach na najwyższej pozycji w sieci wyszukiwania,
+         Udział w wyśw. na najwyższej pozycji w sieci wyszuk.]
+
+  # ---------------------------------------------------------------- reklamy
+  ad_id:
+    en: [Ad ID, "ad_group_ad.ad.id"]
+    pl: [Identyfikator reklamy, ID reklamy]
+  ad_type:
+    en: [Ad type]
+    pl: [Typ reklamy]
+  ad_status:
+    en: [Ad status, Ad state]
+    pl: [Stan reklamy, Status reklamy]
+  ad_strength:
+    en: [Ad strength]
+    pl: [Siła reklamy, Skuteczność reklamy]
+  headline_1:
+    en: [Headline 1]
+    pl: [Nagłówek 1]
+  headline_2:
+    en: [Headline 2]
+    pl: [Nagłówek 2]
+  headline_3:
+    en: [Headline 3]
+    pl: [Nagłówek 3]
+  description_1:
+    en: [Description 1, Description line 1]
+    pl: [Tekst reklamy 1, Opis 1, Wiersz tekstu reklamy 1]
+  description_2:
+    en: [Description 2, Description line 2]
+    pl: [Tekst reklamy 2, Opis 2, Wiersz tekstu reklamy 2]
+  final_url:
+    en: [Final URL, Final URLs]
+    pl: [Końcowy URL, Końcowe adresy URL, Końcowy adres URL]
+
+  # ---------------------------------------------------------------- segmenty
+  device:
+    en: [Device, "segments.device"]
+    pl: [Urządzenie]
+  country:
+    en: [Country/Territory, Country, Country/Region]
+    pl: [Kraj/region, Kraj/terytorium, Kraj]
+  region:
+    en: [Region, Region (User location)]
+    pl: [Region (lokalizacja użytkownika), Województwo]
+  city:
+    en: [City, City (User location)]
+    pl: [Miasto, Miasto (lokalizacja użytkownika)]
+  location:
+    en: [Location, Matched location, Target location, User location]
+    pl: [Lokalizacja, Dopasowana lokalizacja, Docelowa lokalizacja, Lokalizacja użytkownika]
+  location_type:
+    en: [Location type]
+    pl: [Typ lokalizacji]
+  landing_page:
+    en: [Landing page, Expanded landing page, Landing page URL]
+    pl: [Strona docelowa, Rozwinięta strona docelowa, URL strony docelowej]
+  mobile_friendly_click_rate:
+    en: [Mobile-friendly click rate]
+    pl: [Współczynnik kliknięć przyjaznych dla urządzeń mobilnych, Odsetek kliknięć przyjaznych urządzeniom mobilnym]
+  mobile_speed_score:
+    en: [Mobile speed score]
+    pl: [Wynik szybkości na urządzeniach mobilnych, Wynik szybkości strony na urządzeniach mobilnych]
+  audience:
+    en: [Audience segment, Audience, Audience name, User list]
+    pl: [Segment odbiorców, Odbiorcy, Grupa odbiorców, Lista odbiorców]
+  age_range:
+    en: [Age, Age range]
+    pl: [Wiek, Przedział wiekowy]
+  gender:
+    en: [Gender]
+    pl: [Płeć]
+  household_income:
+    en: [Household income]
+    pl: [Dochód gospodarstwa domowego]
+  parental_status:
+    en: [Parental status]
+    pl: [Status rodzicielski]
+
+  # ---------------------------------------------------------------- konwersje
+  conversion_action:
+    en: [Conversion action, Conversion action name, Conversion name, "segments.conversion_action_name"]
+    pl: [Działanie powodujące konwersję, Nazwa działania powodującego konwersję]
+  conversion_category:
+    en: [Conversion category, Conversion action category, Conversion goal]
+    pl: [Kategoria konwersji, Kategoria działania powodującego konwersję, Cel konwersji]
+  conversion_source:
+    en: [Conversion source]
+    pl: [Źródło konwersji]
+  include_in_conversions:
+    en: [Include in "Conversions", Include in Conversions, Primary action]
+    pl: [Uwzględnij w kolumnie „Konwersje”, Uwzględnij w konwersjach, Działanie główne]
+
+  # ---------------------------------------------------------------- statystyki aukcji
+  competitor_domain:
+    en: [Display URL domain]
+    pl: [Domena wyświetlanego URL-a, Domena wyświetlanego adresu URL]
+  impression_share:
+    en: [Impr. share, Impression share]
+    pl: [Udział w wyświetleniach, Udział w wyśw.]
+  overlap_rate:
+    en: [Overlap rate]
+    pl: [Współczynnik nakładania się, Współczynnik nakładania]
+  position_above_rate:
+    en: [Position above rate]
+    pl: [Współczynnik pozycji powyżej, Odsetek pozycji powyżej]
+  top_of_page_rate:
+    en: [Top of page rate]
+    pl: [Współczynnik wyświetleń u góry strony, Odsetek wyświetleń u góry strony]
+  abs_top_of_page_rate:
+    en: [Abs. Top of page rate, Absolute top of page rate, Abs. top of page rate]
+    pl: [Współczynnik wyświetleń na najwyższej pozycji na stronie, Odsetek wyświetleń na najwyższej pozycji]
+  outranking_share:
+    en: [Outranking share]
+    pl: [Udział w wygranych aukcjach, Udział w przewyższeniu w rankingu]
+
+  # ---------------------------------------------------------------- metryki
   impressions:
     en: [Impressions, Impr., Impr, "metrics.impressions"]
     pl: [Wyświetlenia, Wyświetl., Wyśw.]
@@ -58,3 +235,6 @@ columns:
   conversion_value:
     en: [Conv. value, Conversion value, Total conv. value, "metrics.conversions_value"]
     pl: [Wartość konw., Wartość konwersji, Łączna wartość konw.]
+  all_conversions:
+    en: [All conv., All conversions, "metrics.all_conversions"]
+    pl: [Wszystkie konw., Wszystkie konwersje]

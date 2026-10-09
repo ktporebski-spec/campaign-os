@@ -51,3 +51,32 @@ def test_condition_tester_bad_expression(app):
     tester.set_value("import os").run()
     assert not app.exception
     assert any("Błąd wyrażenia" in e.value for e in app.error)
+
+
+def test_sem_coverage_and_levels_full_sample(app):
+    levels = {m.label: m.value for m in app.metric if "ANALYSIS" in m.label}
+    assert levels == {"BASIC ANALYSIS": "3/3 modułów", "ADVANCED ANALYSIS": "6/6 modułów",
+                      "FULL SEM ANALYSIS": "6/6 modułów"}
+    assert any("SEM DATA COVERAGE" in s.value for s in app.subheader)
+
+
+def test_basic_sample_blocks_advanced_modules(app):
+    app.radio(key="data_source").set_value("Dane przykładowe – podstawowe").run()
+    assert not app.exception
+    levels = {m.label: m.value for m in app.metric if "ANALYSIS" in m.label}
+    assert levels["ADVANCED ANALYSIS"] == "0/6 modułów"
+    blocked = [e.label for e in app.expander if e.label.startswith("⛔")]
+    assert "⛔ Device differences" in blocked and "⛔ Auction Insights / competitive pressure" in blocked
+
+
+def test_data_requirements_page():
+    # Plik strony uruchamiany bezpośrednio (AppTest.switch_page dla st.navigation działa dopiero w nowszych
+    # wersjach Streamlit); nawigację sprawdzono w przeglądarce.
+    page = str(Path(APP).parent / "views" / "data_requirements.py")
+    at = AppTest.from_file(page, default_timeout=60).run()
+    assert not at.exception
+    assert at.title[0].value == "Data Requirements"
+    table = at.dataframe[0].value
+    assert len(table) == 12
+    assert set(table["Status"]) == {"Wymagany", "Opcjonalny"}
+    assert table.loc[table["Raport"] == "Campaign", "Status"].iloc[0] == "Wymagany"

@@ -1,39 +1,63 @@
 # Reguły Campaign OS (Rule Engine).
 #
 # Każda reguła:
-#   id              – unikalny identyfikator
+#   id              – unikalny identyfikator (prefiks wskazuje moduł analizy: CMP_, ST_, AG_, KW_, AD_,
+#                     DEV_, TIME_, LOC_, AUD_, LP_, CONV_, AI_, IS_)
 #   name            – nazwa wyświetlana
-#   entity          – campaign | search_term
+#   entity          – campaign | search_term | ad_group | keyword | ad | device | time_slot | location |
+#                     audience | landing_page | conversion_action | competitor
 #   condition       – wyrażenie logiczne (patrz niżej)
+#   sample          – minimalna próba; gdy niespełniona, reguła NIE rekomenduje zmian (domyślnie zależna
+#                     od encji, np. clicks >= min_clicks)
 #   severity        – high | medium | low
-#   category        – grupa rekomendacji (wasted_spend, high_performer, efficiency, trend, growth, relevance)
-#   action          – kod akcji (informacyjnie)
+#   category        – grupa rekomendacji
 #   message         – opis znaleziska; {pole} wstawia wartość, {pole:.2f}/{pole:.0%} formatuje
+#   evidence        – EVIDENCE: liczby, na których opiera się diagnoza (wymagane w praktyce)
 #   recommendation  – co zrobić
 #   impact          – (opcjonalnie) wyrażenie szacujące kwotę, której dotyczy rekomendacja
 #   enabled         – true/false
 #
-# Zmienne dostępne w wyrażeniach:
-#   * kolumny encji: cost, impressions, clicks, conversions, conversion_value, ctr, cpc, cvr, cpa, roas
-#   * campaign: także <metryka>_prev i <metryka>_change (zmiana względna, 0.3 = +30%), cost_share,
-#     cpa_vs_target (CPA / target_cpa)
-#   * search_term: także is_wasted, is_high_performer, active_days, cost_share
-#   * kontekst: account_cost, account_cpa, account_ctr, account_cvr, account_cpc, account_roas,
-#     target_cpa, wasted_min_cost, wasted_min_clicks, period_days, currency
+# Reguła działa wyłącznie na danych z raportu swojej encji. Jeśli raportu nie wgrano – reguła się
+# nie uruchamia. Jeśli raport nie ma potrzebnej kolumny (np. Wynik jakości) – reguła jest pomijana.
+#
+# Zmienne:
+#   * metryki encji: cost, impressions, clicks, conversions, conversion_value, ctr, cpc, cvr, cpa, roas
+#   * campaign: <metryka>_prev, <metryka>_change (0.3 = +30%), cvr_change_z, cost_share, cpa_vs_target,
+#     search_impression_share, search_lost_is_budget, search_lost_is_rank, lost_budget_conversions
+#   * search_term: is_wasted, is_high_performer, active_days, cost_share
+#   * segmenty (ad_group, keyword, device, time_slot, location, audience, landing_page, ad):
+#     cost_share, ctr_index, cvr_index, cpa_index (relacja do całości raportu), cvr_rest (CVR reszty),
+#     cvr_z / ctr_z (test istotności różnicy vs reszta), z_crit (próg |z| z poprawką Bonferroniego na liczbę
+#     segmentów), n_segments, expected_conversions (konwersje oczekiwane przy
+#     CVR reszty), bid_adjustment (sugerowana korekta stawki)
+#   * keyword: quality_score, expected_ctr / ad_relevance / landing_page_experience ("above" | "average" |
+#     "below"), search_impression_share, search_lost_is_rank
+#   * ad: ads_in_group, ctr_group, cvr_group, ad_strength ("excellent" | "good" | "average" | "poor")
+#   * landing_page: mobile_friendly_click_rate, mobile_speed_score
+#   * conversion_action: is_micro, conv_share, value_share, value_per_conversion, has_value_column
+#   * competitor: is_self, impression_share, overlap_rate, position_above_rate, top_of_page_rate,
+#     abs_top_of_page_rate, outranking_share, own_impression_share, is_gap
+#   * kontekst: account_cpa, account_ctr, account_cvr, account_cpc, account_roas, account_search_is,
+#     target_cpa, wasted_min_cost, wasted_min_clicks, min_clicks, min_impressions, min_conversions,
+#     z_threshold, period_days, period_label, currency
 #
 # Porównania z brakującą wartością (np. brak poprzedniego okresu) zawsze dają fałsz.
 
 rules:
-  # ------------------------------------------------------------------ search terms
+  # ================================================================== BASIC: search terms
   - id: ST_WASTED_SPEND
     name: Wasted spend – hasło bez konwersji
     entity: search_term
     condition: is_wasted
+    sample: clicks >= wasted_min_clicks
     severity: high
     category: wasted_spend
     action: add_negative_keyword
     message: >-
       Hasło „{search_term}” wydało {cost:,.2f} {currency} przy {clicks:.0f} kliknięciach i 0 konwersjach.
+    evidence: >-
+      Koszt {cost:,.2f} {currency}, {clicks:.0f} kliknięć, {impressions:,.0f} wyświetleń, 0 konwersji;
+      próg wasted spend: koszt ≥ {wasted_min_cost:,.0f} {currency} i ≥ {wasted_min_clicks:.0f} kliknięć.
     recommendation: >-
       Dodaj [{search_term}] jako wykluczające słowo kluczowe (dopasowanie ścisłe)
       w kampanii „{campaign}” lub na liście wykluczeń konta.
@@ -43,12 +67,16 @@ rules:
     name: High performer – hasło do rozbudowy
     entity: search_term
     condition: is_high_performer
+    sample: clicks >= wasted_min_clicks and conversions >= min_conversions
     severity: medium
     category: high_performer
     action: add_exact_keyword
     message: >-
       Hasło „{search_term}” przyniosło {conversions:.1f} konw. przy CPA {cpa:,.2f} {currency}
       (cel {target_cpa:,.2f} {currency}).
+    evidence: >-
+      {conversions:.1f} konw. z {clicks:.0f} kliknięć (CVR {cvr:.2%}), koszt {cost:,.2f} {currency},
+      CPA {cpa:,.2f} vs cel {target_cpa:,.2f} {currency}.
     recommendation: >-
       Dodaj [{search_term}] jako słowo kluczowe w dopasowaniu ścisłym w grupie „{ad_group}”
       i rozważ podniesienie stawki / dedykowaną reklamę.
@@ -58,11 +86,15 @@ rules:
     name: Hasło z CPA znacznie powyżej celu
     entity: search_term
     condition: target_cpa > 0 and conversions > 0 and cpa >= target_cpa * 2 and cost >= wasted_min_cost
+    sample: clicks >= min_clicks
     severity: medium
     category: efficiency
     action: reduce_bid
     message: >-
       Hasło „{search_term}” ma CPA {cpa:,.2f} {currency} – ponad 2× powyżej celu ({target_cpa:,.2f} {currency}).
+    evidence: >-
+      Koszt {cost:,.2f} {currency}, {clicks:.0f} kliknięć, {conversions:.1f} konw. (CVR {cvr:.2%});
+      CPA {cpa:,.2f} vs cel {target_cpa:,.2f} {currency}.
     recommendation: >-
       Obniż stawki dla słowa wyzwalającego to hasło albo zawęź dopasowanie; jeśli intencja jest
       nietrafiona – wyklucz hasło.
@@ -71,16 +103,19 @@ rules:
   - id: ST_LOW_CTR
     name: Hasło o niskim CTR
     entity: search_term
-    condition: impressions >= 300 and ctr < 0.01
+    condition: ctr < 0.01
+    sample: impressions >= min_impressions
     severity: low
     category: relevance
     action: review_relevance
     message: >-
       Hasło „{search_term}” ma CTR {ctr:.2%} przy {impressions:,.0f} wyświetleniach.
+    evidence: >-
+      {clicks:.0f} kliknięć / {impressions:,.0f} wyświetleń = CTR {ctr:.2%} (CTR konta {account_ctr:.2%}).
     recommendation: >-
       Sprawdź trafność reklam dla tego zapytania; jeśli intencja nie pasuje – dodaj wykluczenie.
 
-  # ------------------------------------------------------------------ kampanie
+  # ================================================================== BASIC: kampanie
   - id: CMP_NO_CONVERSIONS
     name: Kampania bez konwersji
     entity: campaign
@@ -90,6 +125,9 @@ rules:
     action: pause_or_restructure
     message: >-
       Kampania „{campaign}” wydała {cost:,.2f} {currency} bez żadnej konwersji w wybranym okresie.
+    evidence: >-
+      Koszt {cost:,.2f} {currency}, {clicks:,.0f} kliknięć, 0 konwersji (CVR konta {account_cvr:.2%});
+      poprzedni okres: {conversions_prev:.1f} konw.
     recommendation: >-
       Zweryfikuj śledzenie konwersji i targetowanie; jeśli dane są poprawne – ogranicz budżet
       lub wstrzymaj kampanię do czasu przebudowy.
@@ -98,12 +136,16 @@ rules:
   - id: CMP_CPA_INCREASE
     name: Wzrost CPA vs poprzedni okres
     entity: campaign
-    condition: conversions_prev >= 3 and conversions >= 1 and cpa_change >= 0.3
+    condition: cpa_change >= 0.3 and (cvr_change_z <= -z_threshold or cpc_change >= 0.3)
+    sample: conversions_prev >= min_conversions and conversions >= min_conversions and clicks >= min_clicks
     severity: high
     category: trend
     action: investigate_cpa
     message: >-
       CPA kampanii „{campaign}” wzrósł o {cpa_change:+.0%} ({cpa_prev:,.2f} → {cpa:,.2f} {currency}).
+    evidence: >-
+      CVR {cvr_prev:.2%} → {cvr:.2%} (z = {cvr_change_z:.1f}), CPC {cpc_prev:,.2f} → {cpc:,.2f} {currency};
+      konwersje {conversions_prev:.0f} → {conversions:.0f}, kliknięcia {clicks_prev:,.0f} → {clicks:,.0f}.
     recommendation: >-
       Sprawdź nowe wyszukiwane hasła, zmiany stawek i konkurencję (aukcje); przejrzyj hasła
       z kategorii wasted spend dla tej kampanii.
@@ -112,25 +154,33 @@ rules:
   - id: CMP_CONVERSIONS_DROP
     name: Spadek konwersji vs poprzedni okres
     entity: campaign
-    condition: conversions_prev >= 5 and conversions_change <= -0.3
+    condition: conversions_change <= -0.3
+    sample: conversions_prev >= min_conversions * 3
     severity: high
     category: trend
     action: investigate_conversions
     message: >-
       Konwersje kampanii „{campaign}” zmieniły się o {conversions_change:+.0%}
       ({conversions_prev:.1f} → {conversions:.1f}).
+    evidence: >-
+      Konwersje {conversions_prev:.1f} → {conversions:.1f}; kliknięcia {clicks_prev:,.0f} → {clicks:,.0f};
+      CVR {cvr_prev:.2%} → {cvr:.2%}.
     recommendation: >-
       Sprawdź, czy nie zmieniła się strona docelowa, śledzenie konwersji lub udział w wyświetleniach.
 
   - id: CMP_HIGH_CPA
     name: CPA kampanii powyżej celu
     entity: campaign
-    condition: target_cpa > 0 and conversions >= 1 and cpa >= target_cpa * 1.5
+    condition: target_cpa > 0 and cpa >= target_cpa * 1.5
+    sample: conversions >= min_conversions and clicks >= min_clicks
     severity: medium
     category: efficiency
     action: optimize_bids
     message: >-
       Kampania „{campaign}” ma CPA {cpa:,.2f} {currency} – {cpa_vs_target:.0%} celu ({target_cpa:,.2f} {currency}).
+    evidence: >-
+      Koszt {cost:,.2f} {currency} / {conversions:.1f} konw. = CPA {cpa:,.2f} {currency};
+      cel {target_cpa:,.2f} {currency}; udział w koszcie konta {cost_share:.0%}.
     recommendation: >-
       Obniż stawki / docelowy CPA w strategii, wyklucz nierentowne hasła i przesuń budżet
       do kampanii z niższym CPA.
@@ -139,24 +189,31 @@ rules:
   - id: CMP_CTR_DROP
     name: Spadek CTR vs poprzedni okres
     entity: campaign
-    condition: impressions >= 1000 and ctr_change <= -0.2
+    condition: ctr_change <= -0.2
+    sample: impressions >= min_impressions * 3 and impressions_prev >= min_impressions * 3
     severity: medium
     category: trend
     action: refresh_ads
     message: >-
       CTR kampanii „{campaign}” zmienił się o {ctr_change:+.0%} ({ctr_prev:.2%} → {ctr:.2%}).
+    evidence: >-
+      Kliknięcia/wyświetlenia: {clicks_prev:,.0f}/{impressions_prev:,.0f} → {clicks:,.0f}/{impressions:,.0f}.
     recommendation: >-
       Odśwież teksty reklam (RSA), sprawdź rozszerzenia i nowe hasła o niskiej trafności.
 
   - id: CMP_SCALE_OPPORTUNITY
     name: Kampania do skalowania
     entity: campaign
-    condition: target_cpa > 0 and conversions >= 5 and cpa <= target_cpa * 0.7
+    condition: target_cpa > 0 and cpa <= target_cpa * 0.7
+    sample: conversions >= min_conversions * 2 and clicks >= min_clicks
     severity: medium
     category: growth
     action: increase_budget
     message: >-
       Kampania „{campaign}” ma CPA {cpa:,.2f} {currency} ({cpa_vs_target:.0%} celu) przy {conversions:.1f} konw.
+    evidence: >-
+      {conversions:.1f} konw. z {clicks:,.0f} kliknięć, koszt {cost:,.2f} {currency};
+      CPA {cpa:,.2f} vs cel {target_cpa:,.2f} {currency}.
     recommendation: >-
       Zwiększ budżet o 15–20% i monitoruj CPA przez 7 dni; rozważ poszerzenie słów kluczowych.
     impact: (target_cpa - cpa) * conversions
@@ -170,6 +227,555 @@ rules:
     action: review_budget
     message: >-
       Wydatki kampanii „{campaign}” wzrosły o {cost_change:+.0%} ({cost_prev:,.2f} → {cost:,.2f} {currency}).
+    evidence: >-
+      Koszt {cost_prev:,.2f} → {cost:,.2f} {currency}; konwersje {conversions_prev:.1f} → {conversions:.1f}.
     recommendation: >-
       Upewnij się, że wzrost był zamierzony (budżet, strategia stawek) i przekłada się na konwersje.
     impact: cost - cost_prev
+
+  # ================================================================== FULL: Impression Share (kampanie)
+  - id: IS_LOST_BUDGET_PROFITABLE
+    name: Utrata IS przez budżet w rentownej kampanii
+    entity: campaign
+    condition: search_lost_is_budget >= 0.1 and target_cpa > 0 and cpa <= target_cpa
+    sample: conversions >= min_conversions and impressions >= min_impressions
+    severity: high
+    category: impression_share
+    action: increase_budget
+    message: >-
+      Kampania „{campaign}” traci {search_lost_is_budget:.0%} wyświetleń przez budżet, mając CPA poniżej celu.
+    evidence: >-
+      Search IS {search_impression_share:.0%}, Lost IS (budżet) {search_lost_is_budget:.0%},
+      Lost IS (ranking) {search_lost_is_rank:.0%}; CPA {cpa:,.2f} vs cel {target_cpa:,.2f} {currency};
+      szacunkowo ~{lost_budget_conversions:.0f} utraconych konw.
+    recommendation: >-
+      Zwiększ budżet dzienny kampanii (o ~{search_lost_is_budget:.0%} wyświetleń jest do odzyskania)
+      i monitoruj CPA.
+    impact: lost_budget_conversions * target_cpa
+
+  - id: IS_LOST_BUDGET_UNPROFITABLE
+    name: Utrata IS przez budżet przy CPA powyżej celu
+    entity: campaign
+    condition: search_lost_is_budget >= 0.1 and target_cpa > 0 and cpa > target_cpa * 1.2
+    sample: conversions >= min_conversions and impressions >= min_impressions
+    severity: medium
+    category: impression_share
+    action: improve_efficiency_before_budget
+    message: >-
+      Kampania „{campaign}” jest ograniczona budżetem ({search_lost_is_budget:.0%} Lost IS), ale ma CPA
+      powyżej celu – zwiększenie budżetu nie jest zalecane.
+    evidence: >-
+      Lost IS (budżet) {search_lost_is_budget:.0%}; CPA {cpa:,.2f} vs cel {target_cpa:,.2f} {currency}
+      ({cpa_vs_target:.0%} celu).
+    recommendation: >-
+      Najpierw popraw efektywność (wykluczenia, stawki, struktura), dopiero potem zwiększaj budżet.
+
+  - id: IS_LOST_RANK
+    name: Utrata IS przez ranking
+    entity: campaign
+    condition: search_lost_is_rank >= 0.3
+    sample: impressions >= min_impressions
+    severity: medium
+    category: impression_share
+    action: improve_ad_rank
+    message: >-
+      Kampania „{campaign}” traci {search_lost_is_rank:.0%} wyświetleń przez ranking reklamy.
+    evidence: >-
+      Search IS {search_impression_share:.0%}, Lost IS (ranking) {search_lost_is_rank:.0%},
+      Lost IS (budżet) {search_lost_is_budget:.0%}; CTR {ctr:.2%}.
+    recommendation: >-
+      Popraw Ad Rank: Quality Score (trafność reklam, strona docelowa), rozszerzenia; rozważ wyższe stawki
+      dla rentownych słów kluczowych.
+
+  # ================================================================== ADVANCED: grupy reklam
+  - id: AG_NO_CONVERSIONS
+    name: Grupa reklam bez konwersji
+    entity: ad_group
+    condition: conversions == 0 and expected_conversions >= min_conversions
+    severity: high
+    category: wasted_spend
+    action: restructure_ad_group
+    message: >-
+      Grupa „{ad_group}” ({campaign}) wydała {cost:,.2f} {currency} bez konwersji.
+    evidence: >-
+      {clicks:,.0f} kliknięć, 0 konwersji; przy CVR reszty raportu {cvr_rest:.2%} oczekiwano
+      {expected_conversions:.1f} konw.; koszt {cost:,.2f} {currency} ({cost_share:.0%} kosztu).
+    recommendation: >-
+      Przejrzyj słowa kluczowe i wyszukiwane hasła tej grupy, dopasowanie reklam i stronę docelową;
+      ogranicz stawki do czasu poprawy.
+    impact: cost
+
+  - id: AG_HIGH_CPA
+    name: Grupa reklam z wysokim CPA
+    entity: ad_group
+    condition: target_cpa > 0 and cpa >= target_cpa * 1.5 and cvr_z <= -z_crit
+    sample: conversions >= min_conversions and clicks >= min_clicks
+    severity: medium
+    category: efficiency
+    action: reduce_bid
+    message: >-
+      Grupa „{ad_group}” ({campaign}) ma CPA {cpa:,.2f} {currency} ({cpa_index:.1f}× średniej).
+    evidence: >-
+      CVR {cvr:.2%} vs {cvr_rest:.2%} w reszcie (z = {cvr_z:.1f}, próg ±{z_crit:.2f}); {conversions:.1f} konw.,
+      {clicks:,.0f} kliknięć, koszt {cost:,.2f} {currency}.
+    recommendation: >-
+      Obniż stawki grupy, wyklucz nierentowne hasła i sprawdź dopasowanie strony docelowej.
+    impact: cost - conversions * target_cpa
+
+  - id: AG_SCALE
+    name: Grupa reklam do skalowania
+    entity: ad_group
+    condition: target_cpa > 0 and cpa <= target_cpa * 0.7 and cvr_z >= z_crit
+    sample: conversions >= min_conversions * 2 and clicks >= min_clicks
+    severity: low
+    category: growth
+    action: increase_bid
+    message: >-
+      Grupa „{ad_group}” ({campaign}) ma CPA {cpa:,.2f} {currency} ({cpa_index:.1f}× średniej).
+    evidence: >-
+      CVR {cvr:.2%} vs {cvr_rest:.2%} w reszcie (z = {cvr_z:.1f}, próg ±{z_crit:.2f}); {conversions:.1f} konw. z {clicks:,.0f} kliknięć.
+    recommendation: >-
+      Zwiększ stawki / pokrycie słów kluczowych w tej grupie.
+    impact: (target_cpa - cpa) * conversions
+
+  # ================================================================== ADVANCED: słowa kluczowe
+  - id: KW_WASTE
+    name: Słowo kluczowe bez konwersji
+    entity: keyword
+    condition: conversions == 0 and expected_conversions >= min_conversions
+    severity: high
+    category: wasted_spend
+    action: pause_keyword
+    message: >-
+      Słowo kluczowe „{keyword}” ({match_type}, {ad_group}) wydało {cost:,.2f} {currency} bez konwersji.
+    evidence: >-
+      {clicks:,.0f} kliknięć, 0 konwersji; przy CVR reszty {cvr_rest:.2%} oczekiwano {expected_conversions:.1f} konw.
+    recommendation: >-
+      Wstrzymaj słowo lub obniż stawkę; sprawdź, jakie hasła wyzwala (raport Search Terms).
+    impact: cost
+
+  - id: KW_HIGH_CPA
+    name: Słowo kluczowe z wysokim CPA
+    entity: keyword
+    condition: target_cpa > 0 and cpa >= target_cpa * 1.5
+    sample: conversions >= min_conversions and clicks >= min_clicks
+    severity: medium
+    category: efficiency
+    action: reduce_bid
+    message: >-
+      Słowo „{keyword}” ({ad_group}) ma CPA {cpa:,.2f} {currency} ({cpa_index:.1f}× średniej słów).
+    evidence: >-
+      {conversions:.1f} konw. z {clicks:,.0f} kliknięć (CVR {cvr:.2%} vs {cvr_rest:.2%}, z = {cvr_z:.1f});
+      koszt {cost:,.2f} {currency}; cel CPA {target_cpa:,.2f} {currency}.
+    recommendation: >-
+      Obniż stawkę (CPA {cpa_index:.1f}× średniej słów kluczowych) lub zawęź dopasowanie.
+    impact: cost - conversions * target_cpa
+
+  - id: KW_SCALE_LOST_RANK
+    name: Rentowne słowo tracące IS przez ranking
+    entity: keyword
+    condition: target_cpa > 0 and cpa <= target_cpa * 0.8 and search_lost_is_rank >= 0.2
+    sample: conversions >= min_conversions and clicks >= min_clicks
+    severity: medium
+    category: growth
+    action: increase_bid
+    message: >-
+      Słowo „{keyword}” ma CPA {cpa:,.2f} {currency}, ale traci {search_lost_is_rank:.0%} wyświetleń przez ranking.
+    evidence: >-
+      CPA {cpa:,.2f} vs cel {target_cpa:,.2f} {currency}; Search IS {search_impression_share:.0%},
+      Lost IS (ranking) {search_lost_is_rank:.0%}; Wynik jakości {quality_score:.0f}.
+    recommendation: >-
+      Podnieś stawkę dla tego słowa i popraw składowe Quality Score.
+    impact: (target_cpa - cpa) * conversions
+
+  - id: KW_LOW_QS
+    name: Niski Quality Score
+    entity: keyword
+    condition: quality_score <= 4
+    sample: impressions >= min_impressions
+    severity: medium
+    category: quality_score
+    action: improve_quality_score
+    message: >-
+      Słowo „{keyword}” ({ad_group}) ma Wynik jakości {quality_score:.0f}/10.
+    evidence: >-
+      QS {quality_score:.0f}; Oczekiwany CTR: {expected_ctr}, Trafność reklamy: {ad_relevance},
+      Jakość strony docelowej: {landing_page_experience}; {impressions:,.0f} wyświetleń, CTR {ctr:.2%}.
+    recommendation: >-
+      Popraw najsłabszą składową (oznaczoną jako "below"): teksty reklam z frazą słowa, dedykowana grupa
+      reklam lub lepsza strona docelowa.
+
+  - id: KW_EXPECTED_CTR_BELOW
+    name: Oczekiwany CTR poniżej średniej
+    entity: keyword
+    condition: expected_ctr == "below"
+    sample: impressions >= min_impressions
+    severity: low
+    category: quality_score
+    action: improve_ad_copy
+    message: >-
+      Słowo „{keyword}” ma Oczekiwany CTR poniżej średniej.
+    evidence: >-
+      Oczekiwany CTR: below; rzeczywisty CTR {ctr:.2%} ({ctr_index:.2f}× średniej słów);
+      {impressions:,.0f} wyświetleń.
+    recommendation: >-
+      Dodaj słowo kluczowe do nagłówków RSA, mocniejsze CTA i rozszerzenia; rozważ węższe dopasowanie.
+
+  - id: KW_AD_RELEVANCE_BELOW
+    name: Trafność reklamy poniżej średniej
+    entity: keyword
+    condition: ad_relevance == "below"
+    sample: impressions >= min_impressions
+    severity: low
+    category: quality_score
+    action: split_ad_group
+    message: >-
+      Słowo „{keyword}” ma Trafność reklamy poniżej średniej.
+    evidence: >-
+      Trafność reklamy: below; grupa „{ad_group}”; {impressions:,.0f} wyświetleń.
+    recommendation: >-
+      Przenieś słowo do węższej grupy reklam z reklamą zawierającą tę frazę.
+
+  - id: KW_LP_EXPERIENCE_BELOW
+    name: Jakość strony docelowej poniżej średniej
+    entity: keyword
+    condition: landing_page_experience == "below"
+    sample: impressions >= min_impressions
+    severity: low
+    category: quality_score
+    action: improve_landing_page
+    message: >-
+      Słowo „{keyword}” ma Jakość strony docelowej poniżej średniej.
+    evidence: >-
+      Jakość strony docelowej: below; CVR {cvr:.2%} vs {cvr_rest:.2%} w reszcie słów; {clicks:,.0f} kliknięć.
+    recommendation: >-
+      Skieruj ruch na stronę lepiej dopasowaną do frazy, popraw szybkość i wersję mobilną.
+
+  # ================================================================== ADVANCED: reklamy
+  - id: AD_LOW_CTR
+    name: Reklama o CTR niższym niż w grupie
+    entity: ad
+    condition: ads_in_group >= 2 and ctr_index <= 0.8 and ctr_z <= -z_crit
+    sample: impressions >= min_impressions
+    severity: medium
+    category: ads
+    action: replace_ad
+    message: >-
+      Reklama „{ad_name}” w grupie „{ad_group}” ma CTR {ctr:.2%} wobec {ctr_group:.2%} w grupie.
+    evidence: >-
+      {clicks:,.0f} kliknięć / {impressions:,.0f} wyświetleń; CTR {ctr_index:.2f}× średniej grupy
+      (z = {ctr_z:.1f}, próg ±{z_crit:.2f}); siła reklamy: {ad_strength}.
+    recommendation: >-
+      Zastąp lub przepisz reklamę (nagłówki z frazą kluczową, inne USP); zostaw lepiej działający wariant.
+
+  - id: AD_LOW_CVR
+    name: Reklama o CVR niższym niż w grupie
+    entity: ad
+    condition: ads_in_group >= 2 and cvr_z <= -z_crit
+    sample: clicks >= min_clicks
+    severity: medium
+    category: ads
+    action: review_ad_message
+    message: >-
+      Reklama „{ad_name}” w grupie „{ad_group}” konwertuje gorzej ({cvr:.2%} vs {cvr_group:.2%}).
+    evidence: >-
+      {conversions:.1f} konw. z {clicks:,.0f} kliknięć vs CVR reszty grupy {cvr_rest:.2%} (z = {cvr_z:.1f}, próg ±{z_crit:.2f}).
+    recommendation: >-
+      Sprawdź zgodność obietnicy reklamy ze stroną docelową ({final_url}).
+
+  - id: AD_WEAK_STRENGTH
+    name: Słaba siła reklamy RSA
+    entity: ad
+    condition: ad_strength == "poor"
+    sample: impressions >= min_impressions
+    severity: low
+    category: ads
+    action: improve_rsa
+    message: >-
+      Reklama „{ad_name}” ({ad_group}) ma siłę reklamy „słaba”.
+    evidence: >-
+      Siła reklamy: poor; {impressions:,.0f} wyświetleń, CTR {ctr:.2%} vs {ctr_group:.2%} w grupie.
+    recommendation: >-
+      Dodaj więcej unikalnych nagłówków i tekstów (min. 8–10 nagłówków), ogranicz przypinanie.
+
+  # ================================================================== ADVANCED: urządzenia
+  - id: DEV_WEAK
+    name: Urządzenie z istotnie gorszym CVR
+    entity: device
+    condition: cvr_z <= -z_crit and cpa_index >= 1.2
+    sample: clicks >= min_clicks and conversions >= min_conversions
+    severity: medium
+    category: segments
+    action: device_bid_adjustment
+    message: >-
+      {device_label}: CPA {cpa:,.2f} {currency} ({cpa_index:.2f}× średniej), CVR {cvr:.2%}.
+    evidence: >-
+      CVR {cvr:.2%} vs {cvr_rest:.2%} na pozostałych urządzeniach (z = {cvr_z:.1f}, próg ±{z_crit:.2f});
+      {conversions:.1f} konw. z {clicks:,.0f} kliknięć; {cost_share:.0%} kosztu.
+    recommendation: >-
+      Ustaw korektę stawki {bid_adjustment:+.0%} dla urządzenia „{device_label}” (lub cel tCPA per urządzenie
+      w strategii) i sprawdź wersję strony na tym urządzeniu.
+    impact: cost * (1 - 1 / cpa_index)
+
+  - id: DEV_STRONG
+    name: Urządzenie z istotnie lepszym CVR
+    entity: device
+    condition: cvr_z >= z_crit and cpa_index <= 0.85
+    sample: clicks >= min_clicks and conversions >= min_conversions
+    severity: low
+    category: segments
+    action: device_bid_adjustment
+    message: >-
+      {device_label}: CPA {cpa:,.2f} {currency} ({cpa_index:.2f}× średniej), CVR {cvr:.2%}.
+    evidence: >-
+      CVR {cvr:.2%} vs {cvr_rest:.2%} na pozostałych urządzeniach (z = {cvr_z:.1f}, próg ±{z_crit:.2f});
+      {conversions:.1f} konw. z {clicks:,.0f} kliknięć.
+    recommendation: >-
+      Rozważ dodatnią korektę stawki {bid_adjustment:+.0%} dla „{device_label}”.
+
+  # ================================================================== ADVANCED: dzień / godzina
+  - id: TIME_WEAK_SLOT
+    name: Słaby dzień / godzina
+    entity: time_slot
+    condition: cvr_z <= -z_crit and cpa_index >= 1.3
+    sample: clicks >= min_clicks and conversions >= min_conversions
+    severity: medium
+    category: segments
+    action: ad_schedule_adjustment
+    message: >-
+      {slot_type} {slot}: CPA {cpa:,.2f} {currency} ({cpa_index:.2f}× średniej).
+    evidence: >-
+      CVR {cvr:.2%} vs {cvr_rest:.2%} w pozostałych okresach (z = {cvr_z:.1f}, próg ±{z_crit:.2f}); {conversions:.1f} konw.
+      z {clicks:,.0f} kliknięć; {cost_share:.0%} kosztu.
+    recommendation: >-
+      Ustaw w harmonogramie reklam korektę {bid_adjustment:+.0%} dla „{slot}”.
+    impact: cost * (1 - 1 / cpa_index)
+
+  - id: TIME_NO_CONVERSIONS
+    name: Dzień / godzina bez konwersji
+    entity: time_slot
+    condition: conversions == 0 and expected_conversions >= min_conversions
+    severity: medium
+    category: segments
+    action: ad_schedule_adjustment
+    message: >-
+      {slot_type} {slot}: {cost:,.2f} {currency} bez konwersji.
+    evidence: >-
+      {clicks:,.0f} kliknięć, 0 konwersji; przy CVR pozostałych okresów {cvr_rest:.2%} oczekiwano
+      {expected_conversions:.1f} konw.
+    recommendation: >-
+      Ogranicz wyświetlanie reklam w „{slot}” (korekta -50% lub wyłączenie w harmonogramie).
+    impact: cost
+
+  - id: TIME_STRONG_SLOT
+    name: Mocny dzień / godzina
+    entity: time_slot
+    condition: cvr_z >= z_crit and cpa_index <= 0.8
+    sample: clicks >= min_clicks and conversions >= min_conversions
+    severity: low
+    category: segments
+    action: ad_schedule_adjustment
+    message: >-
+      {slot_type} {slot}: CPA {cpa:,.2f} {currency} ({cpa_index:.2f}× średniej).
+    evidence: >-
+      CVR {cvr:.2%} vs {cvr_rest:.2%} w pozostałych okresach (z = {cvr_z:.1f}, próg ±{z_crit:.2f}); {conversions:.1f} konw.
+    recommendation: >-
+      Rozważ dodatnią korektę {bid_adjustment:+.0%} dla „{slot}” i upewnij się, że budżet nie kończy się wcześniej.
+
+  # ================================================================== FULL: lokalizacje
+  - id: LOC_WEAK
+    name: Lokalizacja z istotnie gorszym CVR
+    entity: location
+    condition: cvr_z <= -z_crit and cpa_index >= 1.3
+    sample: clicks >= min_clicks and conversions >= min_conversions
+    severity: medium
+    category: segments
+    action: location_bid_adjustment
+    message: >-
+      {location}: CPA {cpa:,.2f} {currency} ({cpa_index:.2f}× średniej).
+    evidence: >-
+      CVR {cvr:.2%} vs {cvr_rest:.2%} w pozostałych lokalizacjach (z = {cvr_z:.1f}, próg ±{z_crit:.2f});
+      {conversions:.1f} konw. z {clicks:,.0f} kliknięć; {cost_share:.0%} kosztu.
+    recommendation: >-
+      Ustaw korektę stawki {bid_adjustment:+.0%} dla lokalizacji „{location}”.
+    impact: cost * (1 - 1 / cpa_index)
+
+  - id: LOC_NO_CONVERSIONS
+    name: Lokalizacja bez konwersji
+    entity: location
+    condition: conversions == 0 and expected_conversions >= min_conversions
+    severity: medium
+    category: segments
+    action: location_bid_adjustment
+    message: >-
+      {location}: {cost:,.2f} {currency} bez konwersji.
+    evidence: >-
+      {clicks:,.0f} kliknięć, 0 konwersji; przy CVR pozostałych lokalizacji {cvr_rest:.2%} oczekiwano
+      {expected_conversions:.1f} konw.
+    recommendation: >-
+      Obniż stawki (np. -50%) lub wyklucz lokalizację „{location}”; sprawdź zasięg dostaw / ofertę lokalną.
+    impact: cost
+
+  - id: LOC_STRONG
+    name: Lokalizacja z istotnie lepszym CVR
+    entity: location
+    condition: cvr_z >= z_crit and cpa_index <= 0.8
+    sample: clicks >= min_clicks and conversions >= min_conversions
+    severity: low
+    category: segments
+    action: location_bid_adjustment
+    message: >-
+      {location}: CPA {cpa:,.2f} {currency} ({cpa_index:.2f}× średniej).
+    evidence: >-
+      CVR {cvr:.2%} vs {cvr_rest:.2%} w pozostałych lokalizacjach (z = {cvr_z:.1f}, próg ±{z_crit:.2f}); {conversions:.1f} konw.
+    recommendation: >-
+      Rozważ dodatnią korektę stawki {bid_adjustment:+.0%} dla „{location}”.
+
+  # ================================================================== FULL: odbiorcy
+  - id: AUD_WEAK
+    name: Segment odbiorców z istotnie gorszym CVR
+    entity: audience
+    condition: cvr_z <= -z_crit and cpa_index >= 1.3
+    sample: clicks >= min_clicks and conversions >= min_conversions
+    severity: low
+    category: segments
+    action: audience_bid_adjustment
+    message: >-
+      {segment_type} „{segment}”: CPA {cpa:,.2f} {currency} ({cpa_index:.2f}× średniej).
+    evidence: >-
+      CVR {cvr:.2%} vs {cvr_rest:.2%} w pozostałych segmentach (z = {cvr_z:.1f}, próg ±{z_crit:.2f}); {conversions:.1f} konw.
+      z {clicks:,.0f} kliknięć.
+    recommendation: >-
+      Ustaw korektę stawki {bid_adjustment:+.0%} dla segmentu (tryb obserwacji).
+    impact: cost * (1 - 1 / cpa_index)
+
+  - id: AUD_STRONG
+    name: Segment odbiorców z istotnie lepszym CVR
+    entity: audience
+    condition: cvr_z >= z_crit and cpa_index <= 0.8
+    sample: clicks >= min_clicks and conversions >= min_conversions
+    severity: medium
+    category: segments
+    action: audience_bid_adjustment
+    message: >-
+      {segment_type} „{segment}”: CPA {cpa:,.2f} {currency} ({cpa_index:.2f}× średniej).
+    evidence: >-
+      CVR {cvr:.2%} vs {cvr_rest:.2%} w pozostałych segmentach (z = {cvr_z:.1f}, próg ±{z_crit:.2f}); {conversions:.1f} konw.
+      z {clicks:,.0f} kliknięć.
+    recommendation: >-
+      Ustaw dodatnią korektę {bid_adjustment:+.0%} dla segmentu lub dedykowaną kampanię/reklamy dla tej grupy.
+
+  # ================================================================== FULL: strony docelowe
+  - id: LP_LOW_CVR
+    name: Strona docelowa z istotnie gorszym CVR
+    entity: landing_page
+    condition: cvr_z <= -z_crit and cvr_index <= 0.7
+    sample: clicks >= min_clicks
+    severity: medium
+    category: landing_pages
+    action: improve_landing_page
+    message: >-
+      Strona {landing_page} konwertuje {cvr_index:.0%} średniej ({cvr:.2%}).
+    evidence: >-
+      {conversions:.1f} konw. z {clicks:,.0f} kliknięć: CVR {cvr:.2%} vs {cvr_rest:.2%} na pozostałych
+      stronach (z = {cvr_z:.1f}, próg ±{z_crit:.2f}); koszt {cost:,.2f} {currency} ({cost_share:.0%}).
+    recommendation: >-
+      Skieruj ruch z tej strony na lepiej konwertującą (lub popraw ofertę/CTA/szybkość strony).
+    impact: cost * (1 - cvr_index)
+
+  - id: LP_MOBILE_UNFRIENDLY
+    name: Strona nieprzyjazna urządzeniom mobilnym
+    entity: landing_page
+    condition: mobile_friendly_click_rate < 0.9
+    sample: clicks >= min_clicks
+    severity: medium
+    category: landing_pages
+    action: fix_mobile_page
+    message: >-
+      Tylko {mobile_friendly_click_rate:.0%} kliknięć na {landing_page} trafia na wersję przyjazną mobilnie.
+    evidence: >-
+      Współczynnik kliknięć przyjaznych dla urządzeń mobilnych {mobile_friendly_click_rate:.0%};
+      {clicks:,.0f} kliknięć, CVR {cvr:.2%}.
+    recommendation: >-
+      Popraw responsywność strony (lub kieruj ruch mobilny na stronę zoptymalizowaną).
+
+  - id: LP_SLOW_MOBILE
+    name: Niska szybkość strony na urządzeniach mobilnych
+    entity: landing_page
+    condition: mobile_speed_score <= 4
+    sample: clicks >= min_clicks
+    severity: low
+    category: landing_pages
+    action: improve_page_speed
+    message: >-
+      Strona {landing_page} ma wynik szybkości mobilnej {mobile_speed_score:.0f}/10.
+    evidence: >-
+      Mobile speed score {mobile_speed_score:.0f}/10; CVR {cvr:.2%} vs {cvr_rest:.2%} na pozostałych stronach.
+    recommendation: >-
+      Zoptymalizuj obrazy, skrypty i czas odpowiedzi serwera (Core Web Vitals).
+
+  # ================================================================== FULL: konwersje
+  - id: CONV_MICRO_SHARE
+    name: Mikrokonwersje zawyżają wynik
+    entity: conversion_action
+    condition: is_micro and conv_share >= 0.15
+    severity: high
+    category: conversion_tracking
+    action: review_conversion_goals
+    message: >-
+      Działanie „{conversion_action}” ({conversion_category}) to {conv_share:.0%} wszystkich konwersji.
+    evidence: >-
+      {conversions:.1f} konw. = {conv_share:.0%} wszystkich konwersji w raporcie; wartość
+      {conversion_value:,.2f} {currency} ({value_share:.0%} wartości); kategoria „{conversion_category}”
+      rozpoznana jako mikro-/pośrednia konwersja.
+    recommendation: >-
+      Oznacz to działanie jako dodatkowe (nie uwzględniaj w kolumnie „Konwersje”), aby strategia
+      stawek i CPA opierały się na właściwych celach.
+
+  - id: CONV_NO_VALUE
+    name: Działanie konwersji bez wartości
+    entity: conversion_action
+    condition: has_value_column and not is_micro and conversion_value == 0
+    severity: low
+    category: conversion_tracking
+    action: assign_conversion_value
+    message: >-
+      Działanie „{conversion_action}” nie ma przypisanej wartości.
+    evidence: >-
+      {conversions:.1f} konw., wartość 0 {currency}; inne działania raportują wartość.
+    recommendation: >-
+      Przypisz wartość (statyczną lub dynamiczną), aby ROAS i strategie wartościowe były wiarygodne.
+
+  # ================================================================== FULL: konkurencja (Auction Insights)
+  - id: AI_HIGH_PRESSURE
+    name: Silna presja konkurenta
+    entity: competitor
+    condition: not is_self and overlap_rate >= 0.3 and position_above_rate >= 0.5
+    severity: medium
+    category: competition
+    action: monitor_competitor
+    message: >-
+      {competitor_domain} pojawia się w {overlap_rate:.0%} Twoich aukcji i w {position_above_rate:.0%} z nich
+      jest wyżej.
+    evidence: >-
+      Udział w wyśw. konkurenta {impression_share:.0%} (Twój {own_impression_share:.0%}); nakładanie
+      {overlap_rate:.0%}; pozycja powyżej {position_above_rate:.0%}; Twój udział w wygranych aukcjach
+      {outranking_share:.0%}.
+    recommendation: >-
+      Wzmocnij Ad Rank na słowach wspólnych z konkurentem (QS, stawki, rozszerzenia) i wyróżnij ofertę
+      w reklamach.
+
+  - id: AI_IS_GAP
+    name: Konkurent z wyższym udziałem w wyświetleniach
+    entity: competitor
+    condition: not is_self and is_gap >= 0.1
+    severity: low
+    category: competition
+    action: review_coverage
+    message: >-
+      {competitor_domain} ma udział w wyświetleniach {impression_share:.0%} wobec Twojego {own_impression_share:.0%}.
+    evidence: >-
+      Różnica udziału {is_gap:+.0%}; nakładanie {overlap_rate:.0%}; wyświetlenia u góry strony konkurenta
+      {top_of_page_rate:.0%}.
+    recommendation: >-
+      Sprawdź utratę IS przez budżet i ranking w kampaniach, w których występuje ten konkurent.

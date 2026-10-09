@@ -16,6 +16,13 @@ CATEGORY_LABELS = {
     "trend": "Zmiany vs poprzedni okres",
     "growth": "Możliwości wzrostu",
     "relevance": "Trafność",
+    "quality_score": "Quality Score",
+    "impression_share": "Impression Share",
+    "ads": "Reklamy",
+    "segments": "Segmenty (urządzenia, czas, lokalizacje, odbiorcy)",
+    "landing_pages": "Strony docelowe",
+    "conversion_tracking": "Konwersje",
+    "competition": "Konkurencja",
     "other": "Inne",
 }
 
@@ -37,6 +44,10 @@ def build_context(
         "target_cpa": float(target_cpa or 0.0),
         "wasted_min_cost": float(thresholds.get("wasted_min_cost", 30.0)),
         "wasted_min_clicks": float(thresholds.get("wasted_min_clicks", 5)),
+        "min_clicks": float(thresholds.get("min_clicks", 30)),
+        "min_impressions": float(thresholds.get("min_impressions", 300)),
+        "min_conversions": float(thresholds.get("min_conversions", 3)),
+        "z_threshold": float(thresholds.get("z_threshold", 1.96)),
         "period_days": period_days,
         "currency": currency,
     }
@@ -53,17 +64,15 @@ def prepare_campaign_frame(campaigns: pd.DataFrame, target_cpa: float) -> pd.Dat
 
 def generate(
     ruleset: RuleSet,
-    campaigns: pd.DataFrame | None,
-    terms: pd.DataFrame | None,
+    frames: dict[str, pd.DataFrame],
     context: dict[str, Any],
+    stats: dict | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Uruchamia reguły i zwraca posortowane rekomendacje (najważniejsze na górze)."""
-    frames = {}
-    if campaigns is not None and not campaigns.empty:
-        frames["campaign"] = prepare_campaign_frame(campaigns, context.get("target_cpa", 0))
-    if terms is not None and not terms.empty:
-        frames["search_term"] = terms
-    findings, errors = run_rules(ruleset, frames, context)
+    """Uruchamia reguły na dostępnych encjach i zwraca posortowane rekomendacje."""
+    frames = {k: v for k, v in frames.items() if v is not None and not v.empty}
+    if "campaign" in frames:
+        frames["campaign"] = prepare_campaign_frame(frames["campaign"], context.get("target_cpa", 0))
+    findings, errors = run_rules(ruleset, frames, context, stats)
     return prioritize(findings), errors
 
 
