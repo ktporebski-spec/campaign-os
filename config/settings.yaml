@@ -1,0 +1,20 @@
+# Domyślne ustawienia Campaign OS. Wartości progów można nadpisać w panelu bocznym aplikacji.
+
+currency: PLN
+
+# Domyślna długość zakresu analizy (ostatnie N dni dostępnych danych).
+default_range_days: 30
+
+thresholds:
+  # Docelowy CPA. 0 = użyj średniego CPA konta w wybranym okresie.
+  target_cpa: 0
+
+  # Wasted spend: hasło bez konwersji, które wydało co najmniej tyle...
+  wasted_min_cost: 30.0
+  # ...i ma co najmniej tyle kliknięć.
+  wasted_min_clicks: 5
+
+  # High performer: hasło z co najmniej tyloma konwersjami...
+  high_performer_min_conversions: 2
+  # ...i CPA nie wyższym niż (docelowy CPA × ten mnożnik).
+  high_performer_max_cpa_ratio: 0.8

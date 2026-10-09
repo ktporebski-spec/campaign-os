@@ -1,0 +1,59 @@
+# Mapowanie nagłówków eksportów Google Ads (PL/EN) na kanoniczne nazwy kolumn.
+# Porównanie jest odporne na wielkość liter, polskie znaki, kropki i nadmiarowe spacje,
+# więc "Wyświetl." == "wyswietl" == "WYŚWIETL.".
+#
+# Kolumny pochodne (CTR, Śr. CPC, Koszt/konw. itd.) są celowo pomijane –
+# Campaign OS liczy je sam z wartości bazowych.
+
+columns:
+  date:
+    en: [Day, Date, Segment date, Segments date, "segments.date"]
+    pl: [Dzień, Data, Dzien]
+  campaign:
+    en: [Campaign, Campaign name, "campaign.name"]
+    pl: [Kampania, Nazwa kampanii]
+  campaign_id:
+    en: [Campaign ID, "campaign.id"]
+    pl: [Identyfikator kampanii, ID kampanii]
+  campaign_type:
+    en: [Campaign type, Advertising channel type, "campaign.advertising_channel_type"]
+    pl: [Typ kampanii]
+  campaign_status:
+    en: [Campaign status, Campaign state, "campaign.status"]
+    pl: [Stan kampanii, Status kampanii]
+  ad_group:
+    en: [Ad group, Ad group name, "ad_group.name"]
+    pl: [Grupa reklam, Nazwa grupy reklam]
+  search_term:
+    en: [Search term, Search query, Query, "search_term_view.search_term"]
+    pl: [Wyszukiwane hasło, Hasło wyszukiwania, Zapytanie]
+  match_type:
+    en: [Match type, Search term match type, "search_term_view.match_type"]
+    pl: [Typ dopasowania, Typ dopasowania wyszukiwanego hasła]
+  keyword:
+    en: [Keyword, Keyword text]
+    pl: [Słowo kluczowe]
+  added_excluded:
+    en: [Added/Excluded, Added / Excluded]
+    pl: [Dodane/wykluczone, Dodane / wykluczone]
+  currency:
+    en: [Currency code, Currency]
+    pl: [Kod waluty, Waluta]
+  impressions:
+    en: [Impressions, Impr., Impr, "metrics.impressions"]
+    pl: [Wyświetlenia, Wyświetl., Wyśw.]
+  clicks:
+    en: [Clicks, "metrics.clicks"]
+    pl: [Kliknięcia]
+  cost:
+    en: [Cost, Spend, Amount spent]
+    pl: [Koszt, Wydatki]
+  cost_micros:
+    en: [Cost micros, "metrics.cost_micros"]
+    pl: []
+  conversions:
+    en: [Conversions, Conv., "metrics.conversions"]
+    pl: [Konwersje, Konw.]
+  conversion_value:
+    en: [Conv. value, Conversion value, Total conv. value, "metrics.conversions_value"]
+    pl: [Wartość konw., Wartość konwersji, Łączna wartość konw.]
