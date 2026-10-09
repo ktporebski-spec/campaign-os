@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Środowiska
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Streamlit – lokalne sekrety
+.streamlit/secrets.toml
+
+# Dane klientów – nie commitujemy prawdziwych eksportów (sample są wyjątkiem)
+data/*
+!data/sample/
+uploads/
+exports/
+
+# IDE / system
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,175 @@
+# Reguły Campaign OS (Rule Engine).
+#
+# Każda reguła:
+#   id              – unikalny identyfikator
+#   name            – nazwa wyświetlana
+#   entity          – campaign | search_term
+#   condition       – wyrażenie logiczne (patrz niżej)
+#   severity        – high | medium | low
+#   category        – grupa rekomendacji (wasted_spend, high_performer, efficiency, trend, growth, relevance)
+#   action          – kod akcji (informacyjnie)
+#   message         – opis znaleziska; {pole} wstawia wartość, {pole:.2f}/{pole:.0%} formatuje
+#   recommendation  – co zrobić
+#   impact          – (opcjonalnie) wyrażenie szacujące kwotę, której dotyczy rekomendacja
+#   enabled         – true/false
+#
+# Zmienne dostępne w wyrażeniach:
+#   * kolumny encji: cost, impressions, clicks, conversions, conversion_value, ctr, cpc, cvr, cpa, roas
+#   * campaign: także <metryka>_prev i <metryka>_change (zmiana względna, 0.3 = +30%), cost_share,
+#     cpa_vs_target (CPA / target_cpa)
+#   * search_term: także is_wasted, is_high_performer, active_days, cost_share
+#   * kontekst: account_cost, account_cpa, account_ctr, account_cvr, account_cpc, account_roas,
+#     target_cpa, wasted_min_cost, wasted_min_clicks, period_days, currency
+#
+# Porównania z brakującą wartością (np. brak poprzedniego okresu) zawsze dają fałsz.
+
+rules:
+  # ------------------------------------------------------------------ search terms
+  - id: ST_WASTED_SPEND
+    name: Wasted spend – hasło bez konwersji
+    entity: search_term
+    condition: is_wasted
+    severity: high
+    category: wasted_spend
+    action: add_negative_keyword
+    message: >-
+      Hasło „{search_term}” wydało {cost:,.2f} {currency} przy {clicks:.0f} kliknięciach i 0 konwersjach.
+    recommendation: >-
+      Dodaj [{search_term}] jako wykluczające słowo kluczowe (dopasowanie ścisłe)
+      w kampanii „{campaign}” lub na liście wykluczeń konta.
+    impact: cost
+
+  - id: ST_HIGH_PERFORMER
+    name: High performer – hasło do rozbudowy
+    entity: search_term
+    condition: is_high_performer
+    severity: medium
+    category: high_performer
+    action: add_exact_keyword
+    message: >-
+      Hasło „{search_term}” przyniosło {conversions:.1f} konw. przy CPA {cpa:,.2f} {currency}
+      (cel {target_cpa:,.2f} {currency}).
+    recommendation: >-
+      Dodaj [{search_term}] jako słowo kluczowe w dopasowaniu ścisłym w grupie „{ad_group}”
+      i rozważ podniesienie stawki / dedykowaną reklamę.
+    impact: conversions * target_cpa - cost
+
+  - id: ST_HIGH_CPA
+    name: Hasło z CPA znacznie powyżej celu
+    entity: search_term
+    condition: target_cpa > 0 and conversions > 0 and cpa >= target_cpa * 2 and cost >= wasted_min_cost
+    severity: medium
+    category: efficiency
+    action: reduce_bid
+    message: >-
+      Hasło „{search_term}” ma CPA {cpa:,.2f} {currency} – ponad 2× powyżej celu ({target_cpa:,.2f} {currency}).
+    recommendation: >-
+      Obniż stawki dla słowa wyzwalającego to hasło albo zawęź dopasowanie; jeśli intencja jest
+      nietrafiona – wyklucz hasło.
+    impact: cost - conversions * target_cpa
+
+  - id: ST_LOW_CTR
+    name: Hasło o niskim CTR
+    entity: search_term
+    condition: impressions >= 300 and ctr < 0.01
+    severity: low
+    category: relevance
+    action: review_relevance
+    message: >-
+      Hasło „{search_term}” ma CTR {ctr:.2%} przy {impressions:,.0f} wyświetleniach.
+    recommendation: >-
+      Sprawdź trafność reklam dla tego zapytania; jeśli intencja nie pasuje – dodaj wykluczenie.
+
+  # ------------------------------------------------------------------ kampanie
+  - id: CMP_NO_CONVERSIONS
+    name: Kampania bez konwersji
+    entity: campaign
+    condition: conversions == 0 and cost >= wasted_min_cost * 5
+    severity: high
+    category: wasted_spend
+    action: pause_or_restructure
+    message: >-
+      Kampania „{campaign}” wydała {cost:,.2f} {currency} bez żadnej konwersji w wybranym okresie.
+    recommendation: >-
+      Zweryfikuj śledzenie konwersji i targetowanie; jeśli dane są poprawne – ogranicz budżet
+      lub wstrzymaj kampanię do czasu przebudowy.
+    impact: cost
+
+  - id: CMP_CPA_INCREASE
+    name: Wzrost CPA vs poprzedni okres
+    entity: campaign
+    condition: conversions_prev >= 3 and conversions >= 1 and cpa_change >= 0.3
+    severity: high
+    category: trend
+    action: investigate_cpa
+    message: >-
+      CPA kampanii „{campaign}” wzrósł o {cpa_change:+.0%} ({cpa_prev:,.2f} → {cpa:,.2f} {currency}).
+    recommendation: >-
+      Sprawdź nowe wyszukiwane hasła, zmiany stawek i konkurencję (aukcje); przejrzyj hasła
+      z kategorii wasted spend dla tej kampanii.
+    impact: cost - conversions * cpa_prev
+
+  - id: CMP_CONVERSIONS_DROP
+    name: Spadek konwersji vs poprzedni okres
+    entity: campaign
+    condition: conversions_prev >= 5 and conversions_change <= -0.3
+    severity: high
+    category: trend
+    action: investigate_conversions
+    message: >-
+      Konwersje kampanii „{campaign}” zmieniły się o {conversions_change:+.0%}
+      ({conversions_prev:.1f} → {conversions:.1f}).
+    recommendation: >-
+      Sprawdź, czy nie zmieniła się strona docelowa, śledzenie konwersji lub udział w wyświetleniach.
+
+  - id: CMP_HIGH_CPA
+    name: CPA kampanii powyżej celu
+    entity: campaign
+    condition: target_cpa > 0 and conversions >= 1 and cpa >= target_cpa * 1.5
+    severity: medium
+    category: efficiency
+    action: optimize_bids
+    message: >-
+      Kampania „{campaign}” ma CPA {cpa:,.2f} {currency} – {cpa_vs_target:.0%} celu ({target_cpa:,.2f} {currency}).
+    recommendation: >-
+      Obniż stawki / docelowy CPA w strategii, wyklucz nierentowne hasła i przesuń budżet
+      do kampanii z niższym CPA.
+    impact: cost - conversions * target_cpa
+
+  - id: CMP_CTR_DROP
+    name: Spadek CTR vs poprzedni okres
+    entity: campaign
+    condition: impressions >= 1000 and ctr_change <= -0.2
+    severity: medium
+    category: trend
+    action: refresh_ads
+    message: >-
+      CTR kampanii „{campaign}” zmienił się o {ctr_change:+.0%} ({ctr_prev:.2%} → {ctr:.2%}).
+    recommendation: >-
+      Odśwież teksty reklam (RSA), sprawdź rozszerzenia i nowe hasła o niskiej trafności.
+
+  - id: CMP_SCALE_OPPORTUNITY
+    name: Kampania do skalowania
+    entity: campaign
+    condition: target_cpa > 0 and conversions >= 5 and cpa <= target_cpa * 0.7
+    severity: medium
+    category: growth
+    action: increase_budget
+    message: >-
+      Kampania „{campaign}” ma CPA {cpa:,.2f} {currency} ({cpa_vs_target:.0%} celu) przy {conversions:.1f} konw.
+    recommendation: >-
+      Zwiększ budżet o 15–20% i monitoruj CPA przez 7 dni; rozważ poszerzenie słów kluczowych.
+    impact: (target_cpa - cpa) * conversions
+
+  - id: CMP_SPEND_SPIKE
+    name: Skok wydatków vs poprzedni okres
+    entity: campaign
+    condition: cost_prev > 0 and cost_change >= 0.5 and cost >= 100
+    severity: low
+    category: trend
+    action: review_budget
+    message: >-
+      Wydatki kampanii „{campaign}” wzrosły o {cost_change:+.0%} ({cost_prev:,.2f} → {cost:,.2f} {currency}).
+    recommendation: >-
+      Upewnij się, że wzrost był zamierzony (budżet, strategia stawek) i przekłada się na konwersje.
+    impact: cost - cost_prev
