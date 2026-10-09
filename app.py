@@ -161,7 +161,23 @@ def sidebar(settings: dict):
 
     for err in errors:
         st.sidebar.error(err)
+    if source == "Własne pliki CSV":
+        for r in results:
+            show_import_summary(r)
     return results
+
+
+REPORT_NAMES = {CAMPAIGN_DAILY: "raport kampanii", SEARCH_TERMS: "raport Search Terms"}
+
+
+def show_import_summary(r: IngestResult) -> None:
+    """Po imporcie: rozpoznany typ raportu i mapowanie kolumn (np. "Dzień → date")."""
+    st.sidebar.success(f"**{r.source_name}** → {REPORT_NAMES[r.report_type]} "
+                       f"(wiersze: {fmt_value(len(r.df), 'int')})")
+    with st.sidebar.expander(f"Mapowanie kolumn: {r.source_name}", expanded=True):
+        st.markdown("  \n".join(f"{src} → `{dst}`" for src, dst in r.column_mapping.items()))
+        if r.ignored_columns:
+            st.caption("Pominięte kolumny: " + ", ".join(r.ignored_columns))
 
 
 def date_controls(min_d: date, max_d: date, default_days: int) -> tuple[Period, bool]:
@@ -528,11 +544,11 @@ def tab_data(results: list[IngestResult]):
             c[3].metric("Zakres dat", f"{r.df['date'].min():%d.%m} – {r.df['date'].max():%d.%m.%Y}")
             for w in r.warnings:
                 st.caption(f"ℹ️ {w}")
-            mapping = pd.DataFrame(
-                [{"Kolumna w pliku": k, "Kolumna kanoniczna": v} for k, v in r.column_mapping.items()]
-                + [{"Kolumna w pliku": k, "Kolumna kanoniczna": "— (pominięta)"} for k in r.ignored_columns]
-            )
-            st.dataframe(mapping, hide_index=True, width="stretch")
+            st.markdown("**Mapowanie kolumn**")
+            st.code("\n".join(r.mapping_lines()), language=None)
+            if r.ignored_columns:
+                st.caption("Pominięte kolumny (liczone przez Campaign OS lub nieużywane): "
+                           + ", ".join(r.ignored_columns))
             st.markdown("**Podgląd danych po normalizacji**")
             st.dataframe(r.df.head(200), hide_index=True, width="stretch")
             st.download_button("⬇️ Pobierz znormalizowany CSV", csv_bytes(r.df), f"normalized_{r.report_type}.csv",

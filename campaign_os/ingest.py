@@ -59,6 +59,16 @@ PL_MONTHS = {
 }
 
 
+MISSING_DATE_MESSAGE = (
+    "Raport nie zawiera wymiaru daty. W Google Ads dodaj: Segmenty → Czas → Dzień "
+    "i ponownie wyeksportuj raport."
+)
+MISSING_CAMPAIGN_MESSAGE = (
+    "Raport nie zawiera kolumny kampanii (Kampania / Campaign). Dodaj ją do raportu "
+    "w Google Ads i ponownie wyeksportuj raport."
+)
+
+
 class IngestError(ValueError):
     """Plik nie mógł zostać rozpoznany jako obsługiwany raport."""
 
@@ -73,8 +83,18 @@ class IngestResult:
     warnings: list[str] = field(default_factory=list)
     source_name: str = ""
 
+    def mapping_lines(self) -> list[str]:
+        """Mapowanie w formie czytelnej dla użytkownika, np. "Dzień → date"."""
+        return [f"{src} → {dst}" for src, dst in self.column_mapping.items()]
+
 
 # --------------------------------------------------------------------------- aliasy
+
+
+def clean_header(text: str) -> str:
+    """Nagłówek do wyświetlenia: bez BOM, twardych spacji i zbędnych odstępów."""
+    text = str(text).replace("\ufeff", "").replace("\u00a0", " ").replace("\u202f", " ")
+    return " ".join(text.split())
 
 
 def normalize_header(text: str) -> str:
@@ -155,7 +175,7 @@ def _find_header(lines: list[str], aliases_path: Path) -> tuple[int, str]:
             score = len(mapping)
             if score > best[2]:
                 best = (idx, sep, score)
-    if best[2] < 3:
+    if best[2] < 2:
         raise IngestError(
             "Nie znaleziono wiersza nagłówka z rozpoznawalnymi kolumnami Google Ads "
             "(np. Dzień/Day, Kampania/Campaign, Kliknięcia/Clicks, Koszt/Cost)."
@@ -241,15 +261,13 @@ def parse_dates(values: pd.Series) -> pd.Series:
 
 
 def detect_report_type(columns: list[str]) -> str:
+    """date + campaign + search_term → search terms; date + campaign → raport kampanii."""
     cols = set(columns)
-    if "search_term" in cols:
-        return SEARCH_TERMS
-    if {"date", "campaign"} <= cols:
-        return CAMPAIGN_DAILY
-    raise IngestError(
-        "Nie rozpoznano typu raportu: wymagane kolumny daty i kampanii "
-        "(oraz wyszukiwanego hasła dla raportu search terms)."
-    )
+    if "date" not in cols:
+        raise IngestError(MISSING_DATE_MESSAGE)
+    if "campaign" not in cols:
+        raise IngestError(MISSING_CAMPAIGN_MESSAGE)
+    return SEARCH_TERMS if "search_term" in cols else CAMPAIGN_DAILY
 
 
 def read_report(
@@ -274,7 +292,7 @@ def read_report(
         io.StringIO(body), sep=sep, dtype=str, keep_default_na=False,
         skip_blank_lines=True, on_bad_lines="skip", engine="python",
     )
-    df.columns = [str(c).strip() for c in df.columns]
+    df.columns = [clean_header(c) for c in df.columns]
     mapping, ignored, language = map_columns(list(df.columns), aliases_path)
     df = df[list(mapping)].rename(columns=mapping)
 

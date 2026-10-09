@@ -30,14 +30,37 @@ Jak wyeksportować z Google Ads: *Raporty → Kampanie* (lub *Wyszukiwane hasła
 
 ### Normalizacja
 
-Typ raportu i język nagłówków są rozpoznawane automatycznie. Obsługiwane są:
+Raporty eksportowane bezpośrednio z polskiej (lub angielskiej) wersji Google Ads wgrywasz bez
+zmieniania nazw kolumn. Typ raportu jest określany automatycznie:
 
-- nagłówki **PL i EN** (mapowanie w `config/column_aliases.yaml`, odporne na wielkość liter, polskie znaki i kropki – np. `Wyświetl.` = `wyswietl`),
+- **raport Search Terms** – gdy są kolumny `date` + `campaign` + `search_term`,
+- **raport kampanii** – gdy są co najmniej `date` + `campaign`.
+
+Jeśli w raporcie brakuje daty, aplikacja pokazuje komunikat: *„Raport nie zawiera wymiaru daty.
+W Google Ads dodaj: Segmenty → Czas → Dzień i ponownie wyeksportuj raport.”*
+Po imporcie w panelu bocznym widać mapowanie kolumn, np. `Dzień → date`, `Kampania → campaign`, `Koszt → cost`.
+
+Najważniejsze aliasy (pełna lista w `config/column_aliases.yaml`):
+
+| Kolumna | PL | EN |
+|---|---|---|
+| `date` | Dzień, Data | Day, Date |
+| `campaign` / `campaign_id` | Kampania / Identyfikator kampanii | Campaign / Campaign ID |
+| `ad_group` | Grupa reklam | Ad group |
+| `keyword` | Słowo kluczowe | Keyword |
+| `search_term` | Wyszukiwane hasło, Wyszukiwane hasła | Search term |
+| `match_type` | Typ dopasowania | Match type |
+| `impressions` / `clicks` / `cost` | Wyświetlenia (Wyświetl.) / Kliknięcia / Koszt | Impressions (Impr.) / Clicks / Cost |
+| `conversions` / `conversion_value` | Konwersje / Wartość konwersji (Wartość konw.) | Conversions / Conversion value (Conv. value) |
+
+Obsługiwane są:
+
+- nagłówki **PL i EN** – bez względu na wielkość liter, zbędne spacje (także twarde) i polskie znaki (`Dzień` = `DZIEN` = `  dzień `),
 - kodowania UTF-8, UTF-8 z BOM, **UTF-16** („CSV (Excel)”), CP1250,
 - separatory `,` `;` i tabulator,
 - wiersze tytułu/zakresu dat nad tabelą oraz wiersze podsumowań („Razem”, „Total”) na końcu,
 - liczby `1 234,56 zł`, `1,234.56`, `12,5%`, `--` (separator dziesiętny wykrywany per kolumna),
-- daty `2026-09-01`, `01.09.2026`, `Sep 1, 2026`, `1 wrz 2026`,
+- daty `YYYY-MM-DD`, `DD.MM.YYYY` oraz `Sep 1, 2026`, `1 wrz 2026`,
 - kolumny API (`segments.date`, `metrics.cost_micros` → koszt ÷ 1 000 000).
 
 Kolumny pochodne (CTR, Śr. CPC, Koszt/konw.) są pomijane – Campaign OS liczy je sam z wartości bazowych.

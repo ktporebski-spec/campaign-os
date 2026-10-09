@@ -3,8 +3,8 @@ import pytest
 
 from campaign_os.config import SAMPLE_DIR
 from campaign_os.ingest import (
-    CAMPAIGN_DAILY, SEARCH_TERMS, IngestError, normalize_header, parse_dates, parse_numeric,
-    read_report, read_report_file,
+    CAMPAIGN_DAILY, MISSING_DATE_MESSAGE, SEARCH_TERMS, IngestError, detect_report_type, map_columns,
+    normalize_header, parse_dates, parse_numeric, read_report, read_report_file,
 )
 
 PL_CAMPAIGN = (
@@ -133,3 +133,96 @@ def test_sample_files_cover_at_least_30_days():
         res = read_report_file(SAMPLE_DIR / f"{name}.csv")
         assert res.report_type == rtype
         assert res.df["date"].nunique() >= 30
+
+
+# --------------------------------------------------------------------------- eksport z polskiego Google Ads
+
+REQUIRED_ALIASES = [
+    ("Dzień", "date"), ("Data", "date"), ("Day", "date"), ("Date", "date"),
+    ("Kampania", "campaign"), ("Campaign", "campaign"),
+    ("Identyfikator kampanii", "campaign_id"), ("Campaign ID", "campaign_id"),
+    ("Grupa reklam", "ad_group"), ("Ad group", "ad_group"),
+    ("Słowo kluczowe", "keyword"), ("Keyword", "keyword"),
+    ("Wyszukiwane hasło", "search_term"), ("Wyszukiwane hasła", "search_term"), ("Search term", "search_term"),
+    ("Typ dopasowania", "match_type"), ("Match type", "match_type"),
+    ("Wyświetlenia", "impressions"), ("Impressions", "impressions"),
+    ("Kliknięcia", "clicks"), ("Clicks", "clicks"),
+    ("Koszt", "cost"), ("Cost", "cost"),
+    ("Konwersje", "conversions"), ("Conversions", "conversions"),
+    ("Wartość konwersji", "conversion_value"), ("Conversion value", "conversion_value"),
+]
+
+
+@pytest.mark.parametrize("header,canonical", REQUIRED_ALIASES)
+def test_required_aliases(header, canonical):
+    for variant in (header, header.upper(), header.lower(), f"  {header}  ", header.replace(" ", "   ")):
+        mapping, _, _ = map_columns([variant])
+        assert mapping == {variant: canonical}, variant
+
+
+def test_aliases_without_polish_characters():
+    mapping, _, _ = map_columns(["Dzien", "Wyswietlenia", "Klikniecia", "Wartosc konwersji", "Slowo kluczowe"])
+    assert list(mapping.values()) == ["date", "impressions", "clicks", "conversion_value", "keyword"]
+
+
+PL_SEARCH_TERMS_EXPORT = (
+    "Raport wyszukiwanych haseł\n"
+    "01.09.2026 - 02.09.2026\n"
+    "  DZIEŃ ; Kampania;Grupa  reklam;Wyszukiwane hasła;Typ dopasowania;Słowo kluczowe;"
+    "Wyświetlenia;Kliknięcia;Koszt;Konwersje;Wartość konwersji\n"
+    "01.09.2026;Search | Buty;Ogólne;Buty do biegania;Dopasowanie do wyrażenia;buty;1 234;56;123,45;2,00;680,50\n"
+    "02.09.2026;Search | Buty;Ogólne;darmowe buty;Przybliżone;buty;300;10;12,30;0;0\n"
+    "Razem: wyszukiwane hasła;;;;;;1 534;66;135,75;2,00;680,50\n"
+)
+
+
+def test_polish_search_terms_export_semicolon_decimal_comma_ddmmyyyy():
+    res = read_report(PL_SEARCH_TERMS_EXPORT.encode("utf-8"))
+    assert res.report_type == SEARCH_TERMS
+    assert res.mapping_lines()[:4] == [
+        "DZIEŃ → date", "Kampania → campaign", "Grupa reklam → ad_group", "Wyszukiwane hasła → search_term",
+    ]
+    df = res.df.sort_values("date").reset_index(drop=True)
+    assert df["date"].tolist() == [pd.Timestamp("2026-09-01"), pd.Timestamp("2026-09-02")]
+    assert df["cost"].tolist() == [123.45, 12.30]
+    assert df["impressions"].tolist() == [1234, 300]
+    assert df.loc[0, "conversion_value"] == 680.50
+    assert df.loc[0, "search_term"] == "buty do biegania"
+
+
+def test_polish_campaign_export_comma_separator_iso_dates():
+    text = (
+        "Dzień,Kampania,Identyfikator kampanii,Wyświetlenia,Kliknięcia,Koszt,Konwersje,Wartość konwersji\n"
+        '2026-09-01,Search | Buty,123456,"1 234",56,"123,45","2,50","680,00"\n'
+    )
+    res = read_report(text.encode("utf-8"))
+    assert res.report_type == CAMPAIGN_DAILY
+    assert res.df.loc[0, "campaign_id"] == "123456"
+    assert res.df.loc[0, "cost"] == 123.45
+    assert res.df.loc[0, "conversions"] == 2.5
+
+
+@pytest.mark.parametrize("columns,expected", [
+    (["date", "campaign"], CAMPAIGN_DAILY),
+    (["date", "campaign", "cost", "clicks"], CAMPAIGN_DAILY),
+    (["date", "campaign", "search_term"], SEARCH_TERMS),
+])
+def test_detect_report_type(columns, expected):
+    assert detect_report_type(columns) == expected
+
+
+@pytest.mark.parametrize("columns", [["campaign"], ["campaign", "search_term", "cost"]])
+def test_detect_report_type_without_date(columns):
+    with pytest.raises(IngestError) as exc:
+        detect_report_type(columns)
+    assert str(exc.value) == MISSING_DATE_MESSAGE
+
+
+def test_missing_date_message_for_real_export():
+    text = "Kampania;Wyszukiwane hasło;Wyświetlenia;Kliknięcia;Koszt\nA;buty;10;1;2,50\n"
+    with pytest.raises(IngestError) as exc:
+        read_report(text.encode("utf-8"))
+    assert str(exc.value) == (
+        "Raport nie zawiera wymiaru daty. W Google Ads dodaj: Segmenty → Czas → Dzień "
+        "i ponownie wyeksportuj raport."
+    )

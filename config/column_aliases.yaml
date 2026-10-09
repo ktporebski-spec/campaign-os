@@ -1,6 +1,7 @@
 # Mapowanie nagłówków eksportów Google Ads (PL/EN) na kanoniczne nazwy kolumn.
 # Porównanie jest odporne na wielkość liter, polskie znaki, kropki i nadmiarowe spacje,
-# więc "Wyświetl." == "wyswietl" == "WYŚWIETL.".
+# więc "Wyświetl." == "wyswietl" == "  WYŚWIETL. ".
+# Aby obsłużyć nowy wariant nagłówka, wystarczy dopisać go do listy pl/en.
 #
 # Kolumny pochodne (CTR, Śr. CPC, Koszt/konw. itd.) są celowo pomijane –
 # Campaign OS liczy je sam z wartości bazowych.
@@ -26,7 +27,7 @@ columns:
     pl: [Grupa reklam, Nazwa grupy reklam]
   search_term:
     en: [Search term, Search query, Query, "search_term_view.search_term"]
-    pl: [Wyszukiwane hasło, Hasło wyszukiwania, Zapytanie]
+    pl: [Wyszukiwane hasło, Wyszukiwane hasła, Hasło wyszukiwania, Zapytanie]
   match_type:
     en: [Match type, Search term match type, "search_term_view.match_type"]
     pl: [Typ dopasowania, Typ dopasowania wyszukiwanego hasła]
