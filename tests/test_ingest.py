@@ -75,8 +75,6 @@ def test_read_english_search_terms_semicolon_separated():
 
 
 def test_read_utf16_tab_separated_export():
-    tsv = PL_CAMPAIGN.replace(",", "\t").replace('"1 234"', "1234")
-    # zamiana przecinków na tabulatory psuje liczby dziesiętne w cudzysłowach – odbuduj je
     tsv = (
         "Dzień\tKampania\tWyświetlenia\tKliknięcia\tKoszt\tKonwersje\n"
         "2026-09-01\tKampania A\t1 234\t56\t123,45\t2\n"
